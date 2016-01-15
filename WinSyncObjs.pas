@@ -1,6 +1,42 @@
+{-------------------------------------------------------------------------------
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+-------------------------------------------------------------------------------}
+{===============================================================================
+
+  WinSyncObjs - set of classes encapsulating windows synchronization objects
+
+  ©František Milt 2016-01-15
+
+  Version 1.0
+
+===============================================================================}
 unit WinSyncObjs;
 
 interface
+
+{$IFDEF FPC}
+  {$MODE Delphi}
+{$ENDIF}
+
+{$IF not(defined(MSWINDOWS) or defined(WINDOWS))}
+  {$MESSAGE FATAL 'Unsupported operating system.'}
+{$IFEND}
+
+{$IF declared(CompilerVersion)}
+  {$IF CompilerVersion >= 20} // Delphi 2009+
+    {$DEFINE DeprecatedCommentDelphi}
+  {$IFEND}
+{$IFEND}
+
+{$IF defined(FPC) or defined(DeprecatedCommentDelphi)}
+  {$DEFINE DeprecatedComment}
+{$ELSE}
+  {$UNDEF DeprecatedComment}
+{$IFEND}
 
 uses
   Windows;
@@ -16,6 +52,10 @@ const
 
 type
   TWaitResult = (wrSignaled, wrTimeout, wrAbandoned, wrError);
+
+//==============================================================================
+//--  TCriticalSection declaration  --------------------------------------------
+//==============================================================================
 
   TCriticalSection = class(TObject)
   private
@@ -33,6 +73,10 @@ type
     property SpinCount: DWORD read fSpinCount write _SetSpinCount;
   end;
 
+//==============================================================================
+//--  TWinSyncObject declaration  ----------------------------------------------
+//==============================================================================
+
   TWinSyncObject = class(TObject)
   private
     fHandle:      THandle;
@@ -49,6 +93,10 @@ type
     property Name: String read fName;
   end;
 
+//==============================================================================
+//--  TEvent declaration  ------------------------------------------------------
+//==============================================================================
+
   TEvent = class(TWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset, InitialState: Boolean; const Name: String); overload;
@@ -63,8 +111,12 @@ type
     Function PulseEvent is unreliable and should not be used. More info here:
     https://msdn.microsoft.com/en-us/library/windows/desktop/ms684914(v=vs.85).aspx
   }
-    Function PulseEvent: Boolean; deprecated;
+    Function PulseEvent: Boolean; deprecated {$IFDEF DeprecatedComment}'Unreliable, do not use.'{$ENDIF};
   end;
+
+//==============================================================================
+//--  TMutex declaration  ------------------------------------------------------
+//==============================================================================
 
   TMutex = class(TWinSyncObject)
   public
@@ -77,6 +129,10 @@ type
     Function ReleaseMutex: Boolean;
   end;
 
+//==============================================================================
+//--  TSemaphore declaration  --------------------------------------------------
+//==============================================================================
+
   TSemaphore = class(TWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialCount, MaximumCount: Integer; const Name: String); overload;
@@ -88,6 +144,10 @@ type
     Function ReleaseSemaphore(ReleaseCount: Integer; out PreviousCount: Integer): Boolean; overload;
     Function ReleaseSemaphore: Boolean; overload;
   end;
+
+//==============================================================================
+//--  TWaitableTimer declaration  ----------------------------------------------
+//==============================================================================
 
   TTimerAPCRoutine = procedure(ArgToCompletionRoutine: Pointer; TimerLowValue, TimerHighValue: DWORD); stdcall;
   PTimerAPCRoutine = ^TTimerAPCRoutine;
@@ -111,12 +171,22 @@ implementation
 uses
   SysUtils;
 
+//==============================================================================
+//--  TCriticalSection implementation  -----------------------------------------
+//==============================================================================
+
+//------------------------------------------------------------------------------
+//    TCriticalSection - private methods
+//------------------------------------------------------------------------------
+
 procedure TCriticalSection._SetSpinCount(Value: DWORD);
 begin
 fSpinCount := Value;
 SetSpinCount(fSpinCount);
 end;
 
+//------------------------------------------------------------------------------
+//    TCriticalSection - public methods
 //------------------------------------------------------------------------------
 
 constructor TCriticalSection.Create;
@@ -172,7 +242,14 @@ begin
 LeaveCriticalSection(fCriticalSectionObj);
 end;
 
+
 //==============================================================================
+//--  TWinSyncObject implementation  -------------------------------------------
+//==============================================================================
+
+//------------------------------------------------------------------------------
+//    TWinSyncObject - proteted methods
+//------------------------------------------------------------------------------
 
 Function TWinSyncObject.SetAndRectifyName(const Name: String): Boolean;
 begin
@@ -193,6 +270,8 @@ If fHandle = 0 then
   end;
 end;
 
+//------------------------------------------------------------------------------
+//    TWinSyncObject - public methods
 //------------------------------------------------------------------------------
 
 destructor TWinSyncObject.Destroy;
@@ -219,7 +298,14 @@ else
 end;
 end;
 
+
 //==============================================================================
+//--  TEvent implementation  ---------------------------------------------------
+//==============================================================================
+
+//------------------------------------------------------------------------------
+//    TEvent - public methods
+//------------------------------------------------------------------------------
 
 constructor TEvent.Create(SecurityAttributes: PSecurityAttributes; ManualReset, InitialState: Boolean; const Name: String);
 begin
@@ -297,7 +383,14 @@ If not Result then
   fLastError := GetLastError;
 end;
 
+
 //==============================================================================
+//--  TMutex implementation  ---------------------------------------------------
+//==============================================================================
+
+//------------------------------------------------------------------------------
+//    TMutex - public methods
+//------------------------------------------------------------------------------
 
 constructor TMutex.Create(SecurityAttributes: PSecurityAttributes; InitialOwner: Boolean; const Name: String);
 begin
@@ -355,7 +448,14 @@ If not Result then
   fLastError := GetLastError;
 end;
 
+
 //==============================================================================
+//--  TSemaphore implementation  -----------------------------------------------
+//==============================================================================
+
+//------------------------------------------------------------------------------
+//    TSemaphore - public methods
+//------------------------------------------------------------------------------
 
 constructor TSemaphore.Create(SecurityAttributes: PSecurityAttributes; InitialCount, MaximumCount: Integer; const Name: String);
 begin
@@ -422,7 +522,14 @@ begin
 Result := ReleaseSemaphore(1,Dummy);
 end;
 
+
 //==============================================================================
+//--  TWaitableTimer implementation  -------------------------------------------
+//==============================================================================
+
+//------------------------------------------------------------------------------
+//    TWaitableTimer - public methods
+//------------------------------------------------------------------------------
 
 constructor TWaitableTimer.Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String);
 begin
@@ -491,7 +598,7 @@ Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; Co
     Result.dwLowDateTime := 0;
     Result.dwHighDateTime := 0;
     DateTimeToSystemTime(DateTime,SystemTime);
-    If SystemTimeToFileTime(SystemTime,LocalTime) then
+    If SystemTimeToFileTime(SystemTime,{%H-}LocalTime) then
       begin
         If not LocalFileTimeToFileTime(LocalTime,Result) then
           raise Exception.CreateFmt('LocalFileTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
