@@ -9,6 +9,11 @@ const
   SEMAPHORE_MODIFY_STATE = $00000002;
   SEMAPHORE_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or $3;
 
+  TIMER_MODIFY_STATE = $00000002;
+  TIMER_QUERY_STATE  = $00000001;
+  TIMER_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or
+                       TIMER_QUERY_STATE or TIMER_MODIFY_STATE;
+
 type
   TWaitResult = (wrSignaled, wrTimeout, wrAbandoned, wrError);
 
@@ -56,7 +61,7 @@ type
     Function ResetEvent: Boolean;
   {
     Function PulseEvent is unreliable and should not be used. More info here:
-    https://msdn.microsoft.com/en-us/library/windows/desktop/ms684914%28v=vs.85%29.aspx
+    https://msdn.microsoft.com/en-us/library/windows/desktop/ms684914(v=vs.85).aspx
   }
     Function PulseEvent: Boolean; deprecated;
   end;
@@ -84,7 +89,22 @@ type
     Function ReleaseSemaphore: Boolean; overload;
   end;
 
-  //TWaitableTimer = class(TWinSyncObject); ??  
+  TTimerAPCRoutine = procedure(ArgToCompletionRoutine: Pointer; TimerLowValue, TimerHighValue: DWORD); stdcall;
+  PTimerAPCRoutine = ^TTimerAPCRoutine;
+
+  TWaitableTimer = class(TWinSyncObject)
+  public
+    constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String); overload;
+    constructor Create(const Name: String); overload;
+    constructor Create; overload;
+    constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
+    constructor Open(const Name: String); overload;
+    Function SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload;
+    Function SetWaitableTimer(DueTime: Int64; Period: Integer = 0): Boolean; overload;
+    Function SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload;
+    Function SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0): Boolean; overload;
+    Function CancelWaitableTimer: Boolean;
+  end;
 
 implementation
 
@@ -368,7 +388,7 @@ inherited Create;
 SetAndRectifyName(Name);
 SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(fName)));
 end;
- 
+
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
 constructor TSemaphore.Open(const Name: String);
@@ -401,6 +421,106 @@ var
 begin
 Result := ReleaseSemaphore(1,Dummy);
 end;
+
+//==============================================================================
+
+constructor TWaitableTimer.Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String);
+begin
+inherited Create;
+If SetAndRectifyName(Name) then
+  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(fName)))
+else
+  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,nil));
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+constructor TWaitableTimer.Create(const Name: String);
+begin
+Create(nil,True,Name);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+constructor TWaitableTimer.Create;
+begin
+Create(nil,True,'');
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TWaitableTimer.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
+begin
+inherited Create;
+SetAndRectifyName(Name);
+SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(fName)));
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+constructor TWaitableTimer.Open(const Name: String);
+begin
+Open(SYNCHRONIZE or TIMER_MODIFY_STATE,False,Name);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
+begin
+Result := Windows.SetWaitableTimer(fHandle,DueTime,Period,@CompletionRoutine,ArgToCompletionRoutine,Resume);
+If not Result then
+  fLastError := GetLastError;
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer = 0): Boolean;
+begin
+Result := SetWaitableTimer(DueTime,Period,nil,nil,False);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
+
+  Function DateTimeToFileTime(DateTime: TDateTime): FileTime;
+  var
+    LocalTime:  TFileTime;
+    SystemTime: TSystemTime;
+  begin
+    Result.dwLowDateTime := 0;
+    Result.dwHighDateTime := 0;
+    DateTimeToSystemTime(DateTime,SystemTime);
+    If SystemTimeToFileTime(SystemTime,LocalTime) then
+      begin
+        If not LocalFileTimeToFileTime(LocalTime,Result) then
+          raise Exception.CreateFmt('LocalFileTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
+      end
+    else raise Exception.CreateFmt('SystemTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
+  end;
+
+begin
+Result := SetWaitableTimer(Int64(DateTimeToFileTime(DueTime)),Period,CompletionRoutine,ArgToCompletionRoutine,Resume);
+If not Result then
+  fLastError := GetLastError;
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0): Boolean;
+begin
+Result := SetWaitableTimer(DueTime,Period,nil,nil,False);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TWaitableTimer.CancelWaitableTimer: Boolean;
+begin
+Result := Windows.CancelWaitableTimer(fHandle);
+If not Result then
+  fLastError := GetLastError;
+end;
+
 
 end.
 
