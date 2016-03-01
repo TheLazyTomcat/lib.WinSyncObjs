@@ -9,9 +9,9 @@
 
   WinSyncObjs - set of classes encapsulating windows synchronization objects
 
-  ©František Milt 2016-01-15
+  ©František Milt 2016-03-01
 
-  Version 1.0
+  Version 1.0.1
 
 ===============================================================================}
 unit WinSyncObjs;
@@ -169,7 +169,14 @@ type
 implementation
 
 uses
-  SysUtils;
+  SysUtils
+  {$IF Defined(FPC) and not Defined(Unicode)}
+  (*
+    If compiler throws error that LazUTF8 unit cannot be found, you have to
+    add LazUtils to required packages (Project > Project Inspector).
+  *)
+  , LazUTF8
+  {$IFEND};
 
 //==============================================================================
 //--  TCriticalSection implementation  -----------------------------------------
@@ -311,7 +318,11 @@ constructor TEvent.Create(SecurityAttributes: PSecurityAttributes; ManualReset, 
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
+{$IF Defined(FPC) and not Defined(Unicode)}
+  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(UTF8ToWinCP(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(fName)))
+{$IFEND}
 else
   SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,nil));
 end;
@@ -336,7 +347,11 @@ constructor TEvent.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name
 begin
 inherited Create;
 SetAndRectifyName(Name);
+{$IF Defined(FPC) and not Defined(Unicode)}
+SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(fName)));
+{$IFEND}
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -396,7 +411,11 @@ constructor TMutex.Create(SecurityAttributes: PSecurityAttributes; InitialOwner:
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
+{$IF Defined(FPC) and not Defined(Unicode)}
+  SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(UTF8ToWinCP(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(fName)))
+{$IFEND}
 else
   SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,nil));
 end;
@@ -421,7 +440,11 @@ constructor TMutex.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name
 begin
 inherited Create;
 SetAndRectifyName(Name);
+{$IF Defined(FPC) and not Defined(Unicode)}
+SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(fName)));
+{$IFEND}
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -461,7 +484,11 @@ constructor TSemaphore.Create(SecurityAttributes: PSecurityAttributes; InitialCo
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
+{$IF Defined(FPC) and not Defined(Unicode)}
+  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(UTF8ToWinCP(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(fName)))
+{$IFEND}
 else
   SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,nil));
 end;
@@ -486,7 +513,11 @@ constructor TSemaphore.Open(DesiredAccess: LongWord; InheritHandle: Boolean; con
 begin
 inherited Create;
 SetAndRectifyName(Name);
+{$IF Defined(FPC) and not Defined(Unicode)}
+SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(fName)));
+{$IFEND}
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -535,7 +566,11 @@ constructor TWaitableTimer.Create(SecurityAttributes: PSecurityAttributes; Manua
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
+{$IF Defined(FPC) and not Defined(Unicode)}
+  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(UTF8ToWinCP(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(fName)))
+{$IFEND}
 else
   SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,nil));
 end;
@@ -560,7 +595,11 @@ constructor TWaitableTimer.Open(DesiredAccess: DWORD; InheritHandle: Boolean; co
 begin
 inherited Create;
 SetAndRectifyName(Name);
+{$IF Defined(FPC) and not Defined(Unicode)}
+SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(fName)));
+{$IFEND}
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -574,7 +613,7 @@ end;
 
 Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
 begin
-Result := Windows.SetWaitableTimer(fHandle,DueTime,Period,@CompletionRoutine,ArgToCompletionRoutine,Resume);
+Result := Windows.SetWaitableTimer(fHandle,{%H-}DueTime,Period,@CompletionRoutine,ArgToCompletionRoutine,Resume);
 If not Result then
   fLastError := GetLastError;
 end;
