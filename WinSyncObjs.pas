@@ -20,6 +20,8 @@ interface
 
 {$IFDEF FPC}
   {$MODE Delphi}
+  // Activate symbol BARE_FPC if you want to compile this unit outside of Lazarus.
+  {.$DEFINE BARE_FPC}
 {$ENDIF}
 
 {$IF not(defined(MSWINDOWS) or defined(WINDOWS))}
@@ -170,7 +172,7 @@ implementation
 
 uses
   SysUtils
-  {$IF Defined(FPC) and not Defined(Unicode)}
+  {$IF Defined(FPC) and not Defined(Unicode) and not Defined(BARE_FPC)}
   (*
     If compiler throws error that LazUTF8 unit cannot be found, you have to
     add LazUtils to required packages (Project > Project Inspector).
@@ -319,7 +321,11 @@ begin
 inherited Create;
 If SetAndRectifyName(Name) then
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(UTF8ToAnsi(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(UTF8ToWinCP(fName))))
+{$ENDIF}
 {$ELSE}
   SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(fName)))
 {$IFEND}
@@ -348,7 +354,11 @@ begin
 inherited Create;
 SetAndRectifyName(Name);
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ENDIF}
 {$ELSE}
 SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(fName)));
 {$IFEND}
@@ -412,7 +422,11 @@ begin
 inherited Create;
 If SetAndRectifyName(Name) then
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+  SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(UTF8ToAnsi(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(UTF8ToWinCP(fName))))
+{$ENDIF}
 {$ELSE}
   SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(fName)))
 {$IFEND}
@@ -441,7 +455,11 @@ begin
 inherited Create;
 SetAndRectifyName(Name);
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ENDIF}
 {$ELSE}
 SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(fName)));
 {$IFEND}
@@ -485,7 +503,11 @@ begin
 inherited Create;
 If SetAndRectifyName(Name) then
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(UTF8ToAnsi(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(UTF8ToWinCP(fName))))
+{$ENDIF}
 {$ELSE}
   SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(fName)))
 {$IFEND}
@@ -514,7 +536,11 @@ begin
 inherited Create;
 SetAndRectifyName(Name);
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ENDIF}
 {$ELSE}
 SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(fName)));
 {$IFEND}
@@ -567,7 +593,11 @@ begin
 inherited Create;
 If SetAndRectifyName(Name) then
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(UTF8ToAnsi(fName))))
+{$ELSE}
   SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(UTF8ToWinCP(fName))))
+{$ENDIF}
 {$ELSE}
   SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(fName)))
 {$IFEND}
@@ -596,7 +626,11 @@ begin
 inherited Create;
 SetAndRectifyName(Name);
 {$IF Defined(FPC) and not Defined(Unicode)}
+{$IFDEF BARE_FPC}
+SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
+{$ELSE}
 SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
+{$ENDIF}
 {$ELSE}
 SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(fName)));
 {$IFEND}
