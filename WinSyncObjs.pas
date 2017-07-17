@@ -9,32 +9,33 @@
 
   WinSyncObjs - set of classes encapsulating windows synchronization objects
 
-  ©František Milt 2016-03-01
+  ©František Milt 2017-07-17
 
-  Version 1.0.1
+  Version 1.0.2
+
+  Dependencies:
+    StrRect - github.com/ncs-sniper/Lib.StrRect
 
 ===============================================================================}
 unit WinSyncObjs;
 
 interface
 
-{$IFDEF FPC}
-  {$MODE Delphi}
-  // Activate symbol BARE_FPC if you want to compile this unit outside of Lazarus.
-  {.$DEFINE BARE_FPC}
-{$ENDIF}
-
 {$IF not(defined(MSWINDOWS) or defined(WINDOWS))}
   {$MESSAGE FATAL 'Unsupported operating system.'}
 {$IFEND}
 
-{$IF declared(CompilerVersion)}
+{$IFDEF FPC}
+  {$MODE Delphi}
+{$ENDIF}
+
+{$IF Declared(CompilerVersion)}
   {$IF CompilerVersion >= 20} // Delphi 2009+
     {$DEFINE DeprecatedCommentDelphi}
   {$IFEND}
 {$IFEND}
 
-{$IF defined(FPC) or defined(DeprecatedCommentDelphi)}
+{$IF Defined(FPC) or Defined(DeprecatedCommentDelphi)}
   {$DEFINE DeprecatedComment}
 {$ELSE}
   {$UNDEF DeprecatedComment}
@@ -111,7 +112,7 @@ type
     Function ResetEvent: Boolean;
   {
     Function PulseEvent is unreliable and should not be used. More info here:
-    https://msdn.microsoft.com/en-us/library/windows/desktop/ms684914(v=vs.85).aspx
+    https://msdn.microsoft.com/en-us/library/windows/desktop/ms684914
   }
     Function PulseEvent: Boolean; deprecated {$IFDEF DeprecatedComment}'Unreliable, do not use.'{$ENDIF};
   end;
@@ -171,14 +172,7 @@ type
 implementation
 
 uses
-  SysUtils
-  {$IF Defined(FPC) and not Defined(Unicode) and not Defined(BARE_FPC)}
-  (*
-    If compiler throws error that LazUTF8 unit cannot be found, you have to
-    add LazUtils to required packages (Project > Project Inspector).
-  *)
-  , LazUTF8
-  {$IFEND};
+  SysUtils, StrRect;
 
 //==============================================================================
 //--  TCriticalSection implementation  -----------------------------------------
@@ -320,15 +314,7 @@ constructor TEvent.Create(SecurityAttributes: PSecurityAttributes; ManualReset, 
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(UTF8ToAnsi(fName))))
-{$ELSE}
-  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(UTF8ToWinCP(fName))))
-{$ENDIF}
-{$ELSE}
-  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(fName)))
-{$IFEND}
+  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(StrToWin(fName))))
 else
   SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,nil));
 end;
@@ -353,15 +339,7 @@ constructor TEvent.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name
 begin
 inherited Create;
 SetAndRectifyName(Name);
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
-{$ELSE}
-SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
-{$ENDIF}
-{$ELSE}
-SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(fName)));
-{$IFEND}
+SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -421,15 +399,7 @@ constructor TMutex.Create(SecurityAttributes: PSecurityAttributes; InitialOwner:
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-  SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(UTF8ToAnsi(fName))))
-{$ELSE}
-  SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(UTF8ToWinCP(fName))))
-{$ENDIF}
-{$ELSE}
-  SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(fName)))
-{$IFEND}
+  SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,PChar(StrToWin(fName))))
 else
   SetAndCheckHandle(CreateMutex(SecurityAttributes,InitialOwner,nil));
 end;
@@ -454,15 +424,7 @@ constructor TMutex.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name
 begin
 inherited Create;
 SetAndRectifyName(Name);
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
-{$ELSE}
-SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
-{$ENDIF}
-{$ELSE}
-SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(fName)));
-{$IFEND}
+SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -502,15 +464,7 @@ constructor TSemaphore.Create(SecurityAttributes: PSecurityAttributes; InitialCo
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(UTF8ToAnsi(fName))))
-{$ELSE}
-  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(UTF8ToWinCP(fName))))
-{$ENDIF}
-{$ELSE}
-  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(fName)))
-{$IFEND}
+  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(StrToWin(fName))))
 else
   SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,nil));
 end;
@@ -535,15 +489,7 @@ constructor TSemaphore.Open(DesiredAccess: LongWord; InheritHandle: Boolean; con
 begin
 inherited Create;
 SetAndRectifyName(Name);
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
-{$ELSE}
-SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
-{$ENDIF}
-{$ELSE}
-SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(fName)));
-{$IFEND}
+SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -592,15 +538,7 @@ constructor TWaitableTimer.Create(SecurityAttributes: PSecurityAttributes; Manua
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(UTF8ToAnsi(fName))))
-{$ELSE}
-  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(UTF8ToWinCP(fName))))
-{$ENDIF}
-{$ELSE}
-  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(fName)))
-{$IFEND}
+  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(StrToWin(fName))))
 else
   SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,nil));
 end;
@@ -625,15 +563,7 @@ constructor TWaitableTimer.Open(DesiredAccess: DWORD; InheritHandle: Boolean; co
 begin
 inherited Create;
 SetAndRectifyName(Name);
-{$IF Defined(FPC) and not Defined(Unicode)}
-{$IFDEF BARE_FPC}
-SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(UTF8ToAnsi(fName))));
-{$ELSE}
-SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(UTF8ToWinCP(fName))));
-{$ENDIF}
-{$ELSE}
-SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(fName)));
-{$IFEND}
+SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
