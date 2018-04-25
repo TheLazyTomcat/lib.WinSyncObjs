@@ -19,14 +19,13 @@
 ===============================================================================}
 unit WinSyncObjs;
 
-interface
-
 {$IF not(defined(MSWINDOWS) or defined(WINDOWS))}
   {$MESSAGE FATAL 'Unsupported operating system.'}
 {$IFEND}
 
 {$IFDEF FPC}
   {$MODE Delphi}
+  {$DEFINE FPC_DisableWarns}
 {$ENDIF}
 
 {$IF Declared(CompilerVersion)}
@@ -40,6 +39,8 @@ interface
 {$ELSE}
   {$UNDEF DeprecatedComment}
 {$IFEND}
+
+interface
 
 uses
   Windows;
@@ -173,6 +174,11 @@ implementation
 
 uses
   SysUtils, StrRect;
+
+{$IFDEF FPC_DisableWarns}
+  {$WARN 5057 OFF} // Local variable "$1" does not seem to be initialized
+  {$WARN 5058 OFF} // Variable "$1" does not seem to be initialized
+{$ENDIF}
 
 //==============================================================================
 //--  TCriticalSection implementation  -----------------------------------------
@@ -577,7 +583,7 @@ end;
 
 Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
 begin
-Result := Windows.SetWaitableTimer(fHandle,{%H-}DueTime,Period,@CompletionRoutine,ArgToCompletionRoutine,Resume);
+Result := Windows.SetWaitableTimer(fHandle,DueTime,Period,@CompletionRoutine,ArgToCompletionRoutine,Resume);
 If not Result then
   fLastError := GetLastError;
 end;
@@ -601,7 +607,7 @@ Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; Co
     Result.dwLowDateTime := 0;
     Result.dwHighDateTime := 0;
     DateTimeToSystemTime(DateTime,SystemTime);
-    If SystemTimeToFileTime(SystemTime,{%H-}LocalTime) then
+    If SystemTimeToFileTime(SystemTime,LocalTime) then
       begin
         If not LocalFileTimeToFileTime(LocalTime,Result) then
           raise Exception.CreateFmt('LocalFileTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
