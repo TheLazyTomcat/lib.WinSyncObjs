@@ -14,7 +14,9 @@
   Version 1.0.2
 
   Dependencies:
-    StrRect - github.com/ncs-sniper/Lib.StrRect
+    AuxTypes    - github.com/ncs-sniper/Lib.AuxTypes
+    AuxClasses  - github.com/ncs-sniper/Lib.AuxClasses
+    StrRect     - github.com/ncs-sniper/Lib.StrRect
 
 ===============================================================================}
 unit WinSyncObjs;
@@ -43,7 +45,7 @@ unit WinSyncObjs;
 interface
 
 uses
-  Windows;
+  Windows, AuxClasses;
 
 const
   SEMAPHORE_MODIFY_STATE = $00000002;
@@ -61,7 +63,7 @@ type
 //--  TCriticalSection declaration  --------------------------------------------
 //==============================================================================
 
-  TCriticalSection = class(TObject)
+  TCriticalSection = class(TCustomObject)
   private
     fCriticalSectionObj:  TRTLCriticalSection;
     fSpinCount:           DWORD;
@@ -81,7 +83,7 @@ type
 //--  TWinSyncObject declaration  ----------------------------------------------
 //==============================================================================
 
-  TWinSyncObject = class(TObject)
+  TWinSyncObject = class(TCustomObject)
   private
     fHandle:      THandle;
     fLastError:   Integer;
