@@ -15,7 +15,7 @@
 
   Last change 2020-01-01
 
-  ©2015-2020 František Milt
+  ©2016-2020 František Milt
 
   Contacts:
     František Milt: frantisek.milt@gmail.com
