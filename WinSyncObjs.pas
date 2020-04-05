@@ -11,9 +11,9 @@
 
     Set of classes encapsulating windows synchronization objects.
 
-  Version 1.0.3 (2020-01-01)
+  Version 1.0.4 (2020-04-06)
 
-  Last change 2020-01-01
+  Last change 2020-04-06
 
   ©2016-2020 František Milt
 
@@ -150,7 +150,7 @@ type
     constructor Create(const Name: String); overload;
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
-    constructor Open(const Name: String); overload;
+    constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
     Function WaitForAndReset(Timeout: DWORD = INFINITE): TWaitResult;
     Function SetEvent: Boolean;
     Function ResetEvent: Boolean;
@@ -176,7 +176,7 @@ type
     constructor Create(const Name: String); overload;
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
-    constructor Open(const Name: String); overload;
+    constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
     Function WaitForAndRelease(TimeOut: DWORD = INFINITE): TWaitResult;
     Function ReleaseMutex: Boolean;
   end;
@@ -220,7 +220,7 @@ type
     constructor Create(const Name: String); overload;
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
-    constructor Open(const Name: String); overload;
+    constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
     Function SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload;
     Function SetWaitableTimer(DueTime: Int64; Period: Integer = 0): Boolean; overload;
     Function SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload;
@@ -421,7 +421,7 @@ end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
-constructor TEvent.Open(const Name: String);
+constructor TEvent.Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
 begin
 Open(SYNCHRONIZE or EVENT_MODIFY_STATE,False,Name);
 end;
@@ -511,7 +511,7 @@ end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
-constructor TMutex.Open(const Name: String);
+constructor TMutex.Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
 begin
 Open(SYNCHRONIZE or MUTEX_MODIFY_STATE,False,Name);
 end;
@@ -660,7 +660,7 @@ end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
-constructor TWaitableTimer.Open(const Name: String);
+constructor TWaitableTimer.Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
 begin
 Open(SYNCHRONIZE or TIMER_MODIFY_STATE,False,Name);
 end;
