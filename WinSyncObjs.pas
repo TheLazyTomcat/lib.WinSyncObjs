@@ -11,9 +11,9 @@
 
     Set of classes encapsulating windows synchronization objects.
 
-  Version 1.0.4 (2020-04-06)
+  Version 1.0.5 (2020-06-07)
 
-  Last change 2020-04-06
+  Last change 2020-06-07
 
   ©2016-2020 František Milt
 
@@ -77,12 +77,13 @@ const
                        TIMER_QUERY_STATE or TIMER_MODIFY_STATE;
 
 type
-  TWaitResult = (wrSignaled, wrTimeout, wrAbandoned, wrError);
+  TWaitResult = (wrSignaled, wrTimeout, wrAbandoned, wrError, wrIOCompletion);
 
   // library-specific exception
   EWSOException = class(Exception);
   
-  EWSOTimeConversionError = class(EWSOException);
+  EWSOTimeConversionError   = class(EWSOException);
+  EWSOMultiWaitInvalidCount = class(EWSOException);
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -227,6 +228,32 @@ type
     Function SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0): Boolean; overload;
     Function CancelWaitableTimer: Boolean;
   end;
+
+{===============================================================================
+    Utility functions
+===============================================================================}
+
+{
+  Objects array must not be empty and must not contain more than 64 objects,
+  otherwise an EWSOMultiWaitInvalidCount exception is raised.
+
+  If WaitAll is set to true, the function will return wrSignaled only when ALL
+  objects are signaled, otherwise it will return wrSignaled when at least one
+  object becomes signaled.
+
+  Timeout is in milliseconds.
+
+  Index indicates which object was signaled or abandoned when wrSignaled or
+  wrAbandoned is returned. In case of wrError, the Index contains a system
+  error number. For other results, the value of Index is undefined.
+
+  Default value for WaitAll is false.
+  Default value for Timeout is INFINITE.
+}
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer): TWaitResult; overload;
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject; Timeout: DWORD; out Index: Integer): TWaitResult; overload;
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject; out Index: Integer): TWaitResult; overload;
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject): TWaitResult; overload;
 
 implementation
 
@@ -727,6 +754,76 @@ If not Result then
   fLastError := GetLastError;
 end;
 
+{===============================================================================
+    Utility functions
+===============================================================================}
+
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer): TWaitResult;
+var
+  Handles:    packed array of THandle;
+  i:          Integer;
+  WaitResult: DWORD;
+begin
+Index := -1;
+If (Length(Objects) > 0) and (Length(Objects) <= MAXIMUM_WAIT_OBJECTS) then
+  begin
+    // prepare handle array
+    SetLength(Handles,Length(Objects));
+    For i := Low(Objects) to High(Objects) do
+      Handles[i] := Objects[i].Handle;
+    // waiting
+    WaitResult := WaitForMultipleObjectsEx(Length(Handles),Addr(Handles[Low(Handles)]),WaitAll,Timeout,False);
+    // process result
+    case WaitResult of
+      WAIT_OBJECT_0..
+      Pred(WAIT_OBJECT_0 + MAXIMUM_WAIT_OBJECTS):
+        begin
+          Result := wrSignaled;
+          Index := Integer(WaitResult - WAIT_OBJECT_0);
+        end;
+      WAIT_ABANDONED_0..
+      Pred(WAIT_ABANDONED_0 + MAXIMUM_WAIT_OBJECTS):
+        begin
+          Result := wrAbandoned;
+          Index := Integer(WaitResult - WAIT_ABANDONED_0);
+        end;
+      WAIT_IO_COMPLETION:
+        Result := wrIOCompletion; // should not be returned, but...
+      WAIT_TIMEOUT:
+        Result := wrTimeout;
+      WAIT_FAILED:
+        Result := wrError;
+    else
+      Result := wrError;
+    end;
+    If Result = wrError then
+      Index := Integer(GetLastError);
+  end
+else raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleObjects: Invalid object count (%d).',[Length(Objects)]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject; Timeout: DWORD; out Index: Integer): TWaitResult;
+begin
+Result := WaitForMultipleObjects(Objects,False,Timeout,Index);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject; out Index: Integer): TWaitResult;
+begin
+Result := WaitForMultipleObjects(Objects,False,INFINITE,Index);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleObjects(Objects: array of TWinSyncObject): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForMultipleObjects(Objects,False,INFINITE,Index);
+end;
 
 end.
 
