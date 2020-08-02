@@ -13,7 +13,7 @@
 
   Version 1.0.5 (2020-06-07)
 
-  Last change 2020-06-07
+  Last change 2020-08-02
 
   ©2016-2020 František Milt
 
@@ -48,6 +48,7 @@ unit WinSyncObjs;
   {$DEFINE FPC_DisableWarns}
   {$MACRO ON}
 {$ENDIF}
+{$H+}
 
 {$IF Declared(CompilerVersion)}
   {$IF CompilerVersion >= 20} // Delphi 2009+
