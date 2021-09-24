@@ -83,9 +83,11 @@ type
   // library-specific exceptions
   EWSOException = class(Exception);
 
-  EWSOTimeConversionError   = class(EWSOException);
-  EWSOMultiWaitInvalidCount = class(EWSOException);
-  EWSOWaitError             = class(EWSOException);
+  EWSOTimeConversionError    = class(EWSOException);
+  EWSOMultiWaitInvalidCount  = class(EWSOException);
+  EWSOWaitError              = class(EWSOException);
+  EWSOInvalidHandle          = class(EWSOException);
+  EWSOHandleDuplicationError = class(EWSOException);
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -129,9 +131,29 @@ type
   protected
     Function SetAndRectifyName(const Name: String): Boolean; virtual;
     procedure SetAndCheckHandle(Handle: THandle); virtual;
+    procedure DuplicateAndSetHandleFrom(SourceProcess: THandle; SourceHandle: THandle); virtual;
   public
+    constructor CreateFrom(Handle: THandle{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+    constructor DuplicateFrom(SourceHandle: THandle); overload;
+    constructor DuplicateFrom(SourceWinSyncObject: TWinSyncObject); overload;
+    {
+      WARNING - Functions DuplicateFromProcess and DuplicateFromProcessID
+                should NOT be used when duplicating handle from 64bit process
+                for a 32bit process.
+                In such situation, use methods DuplicateForProcess or
+                DuplicateForProcessID to create handle for 32bit process from
+                inside of 64bit process.
+    }
+    constructor DuplicateFromProcess(SourceProcess: THandle; SourceHandle: THandle);
+    constructor DuplicateFromProcessID(SourceProcessID: DWORD; SourceHandle: THandle);
     destructor Destroy; override;
-    // warning - the first overload does not set LastError property
+    Function DuplicateForProcess(TargetProcess: THandle): THandle; virtual;
+    Function DuplicateForProcessID(TargetProcessID: DWORD): THandle; virtual;
+    {
+      WARNING - the first overload of method WaitFor intentionaly does not set
+                LastError property as the error code is returned in parameter
+                ErrCode.
+    }
     Function WaitFor(Timeout: DWORD; out ErrCode: DWORD; Alertable: Boolean = False): TWaitResult; overload; virtual;
     Function WaitFor(Timeout: DWORD = INFINITE; Alertable: Boolean = False): TWaitResult; overload; virtual;
     property Handle: THandle read fHandle;
@@ -397,8 +419,8 @@ end;
 Function TWinSyncObject.SetAndRectifyName(const Name: String): Boolean;
 begin
 {
-  Names should not contain backslashes, but they can separate prefixes, so
-  in theory they are allowed - do not replace them, leave this responsibility
+  Names should not contain backslashes (\, #92), but they can separate prefixes,
+  so in theory they are allowed - do not replace them, leave this responsibility
   on the user.
 }
 fName := Name;
@@ -419,14 +441,99 @@ If fHandle = 0 then
   end;
 end;
 
+//------------------------------------------------------------------------------
+
+procedure TWinSyncObject.DuplicateAndSetHandleFrom(SourceProcess: THandle; SourceHandle: THandle);
+var
+  NewHandle:  THandle;
+begin
+If DuplicateHandle(SourceProcess,SourceHandle,GetCurrentProcess,@NewHandle,0,False,DUPLICATE_SAME_ACCESS) then
+  SetAndCheckHandle(NewHandle)
+else
+  raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateHandleFrom: Handle duplication failed (0x%.8x).',[GetLastError]);
+end;
+
 {-------------------------------------------------------------------------------
     TWinSyncObject - public methods
 -------------------------------------------------------------------------------}
+
+constructor TWinSyncObject.CreateFrom(Handle: THandle{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+inherited Create;
+fHandle := Handle;
+If fHandle = 0 then
+  raise EWSOInvalidHandle.Create('TWinSyncObject.CreateFrom: Null handle.');
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TWinSyncObject.DuplicateFrom(SourceHandle: THandle);
+begin
+DuplicateFromProcess(GetCurrentProcess,SourceHandle);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TWinSyncObject.DuplicateFrom(SourceWinSyncObject: TWinSyncObject);
+begin
+DuplicateFrom(SourceWinSyncObject.Handle);
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TWinSyncObject.DuplicateFromProcess(SourceProcess: THandle; SourceHandle: THandle);
+begin
+inherited Create;
+DuplicateAndSetHandleFrom(SourceProcess,SourceHandle);
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TWinSyncObject.DuplicateFromProcessID(SourceProcessID: DWORD; SourceHandle: THandle);
+var
+  SourceProcess:  THandle;
+begin
+inherited Create;
+SourceProcess := OpenProcess(PROCESS_DUP_HANDLE,False,SourceProcessID);
+If SourceProcess <> 0 then
+  try
+    DuplicateAndSetHandleFrom(SourceProcess,SourceHandle);
+  finally
+    CloseHandle(SourceProcess);
+  end
+else raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateFromProcessID: Failed to open source process (0x%.8x).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
 
 destructor TWinSyncObject.Destroy;
 begin
 CloseHandle(fHandle);
 inherited;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TWinSyncObject.DuplicateForProcess(TargetProcess: THandle): THandle;
+begin
+If not DuplicateHandle(GetCurrentProcess,fHandle,TargetProcess,@Result,0,False,DUPLICATE_SAME_ACCESS) then
+  raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateForProcess: Handle duplication failed (0x%.8x).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TWinSyncObject.DuplicateForProcessID(TargetProcessID: DWORD): THandle;
+var
+  TargetProcess:  THandle;
+begin
+TargetProcess := OpenProcess(PROCESS_DUP_HANDLE,False,TargetProcessID);
+If TargetProcess <> 0 then
+  try
+    Result := DuplicateForProcess(TargetProcess);
+  finally
+    CloseHandle(TargetProcess);
+  end
+else raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateForProcessID: Failed to open target process (0x%.8x).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
