@@ -124,7 +124,7 @@ type
 
 {===============================================================================
 --------------------------------------------------------------------------------
-                                 TWinSyncObject
+                                 TWinSyncObject                                 
 --------------------------------------------------------------------------------
 ===============================================================================}
 {===============================================================================
@@ -132,41 +132,73 @@ type
 ===============================================================================}
 type
   TWinSyncObject = class(TCustomObject)
-  private
-    fHandle:      THandle;
-    fLastError:   DWORD;
-    fName:        String;
   protected
+    fLastError: DWORD;
+    fName:      String;
     Function SetAndRectifyName(const Name: String): Boolean; virtual;
+  public
+    constructor Create;
+  {
+    LastError stores code of the last operating system error that has not
+    resulted in an exception being raised (eg. error during waiting).
+  }
+    property LastError: DWORD read fLastError;
+    property Name: String read fName;
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                              TComplexWinSyncObject
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TComplexWinSyncObject - class declaration
+===============================================================================}
+type
+  TComplexWinSyncObject = class(TCustomObject)
+  protected
+    fProcessShared: Boolean;
+  public
+    property ProcessShared: Boolean read fProcessShared;
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                              TSimpleWinSyncObject
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TSimpleWinSyncObject - class declaration
+===============================================================================}
+type
+  TSimpleWinSyncObject = class(TWinSyncObject)
+  protected
+    fHandle:  THandle;
+    Function SetAndRectifyName(const Name: String): Boolean; override;
     procedure SetAndCheckHandle(Handle: THandle); virtual;
     procedure DuplicateAndSetHandleFrom(SourceProcess: THandle; SourceHandle: THandle); virtual;
   public
     constructor CreateFrom(Handle: THandle{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
     constructor DuplicateFrom(SourceHandle: THandle); overload;
-    constructor DuplicateFrom(SourceWinSyncObject: TWinSyncObject); overload;
-    {
-      WARNING - Functions DuplicateFromProcess and DuplicateFromProcessID
-                should NOT be used when duplicating handle from 64bit process
-                for a 32bit process.
-                In such situation, use methods DuplicateForProcess or
-                DuplicateForProcessID to create handle for 32bit process from
-                inside of 64bit process.
-    }
+    constructor DuplicateFrom(SourceObject: TSimpleWinSyncObject); overload;
+  {
+    When passing handle from 32bit process to 64bit process, it is safe to
+    zero- or sign-extend it. In the opposite direction, it is safe to truncate
+    it.
+  }
     constructor DuplicateFromProcess(SourceProcess: THandle; SourceHandle: THandle);
     constructor DuplicateFromProcessID(SourceProcessID: DWORD; SourceHandle: THandle);
     destructor Destroy; override;
     Function DuplicateForProcess(TargetProcess: THandle): THandle; virtual;
     Function DuplicateForProcessID(TargetProcessID: DWORD): THandle; virtual;
-    {
-      WARNING - the first overload of method WaitFor intentionaly does not set
-                LastError property as the error code is returned in parameter
-                ErrCode.
-    }
+  {
+    WARNING - the first overload of method WaitFor intentionaly does not set
+              LastError property as the error code is returned in parameter
+              ErrCode.
+  }
     Function WaitFor(Timeout: DWORD; out ErrCode: DWORD; Alertable: Boolean = False): TWaitResult; overload; virtual;
     Function WaitFor(Timeout: DWORD = INFINITE; Alertable: Boolean = False): TWaitResult; overload; virtual;
     property Handle: THandle read fHandle;
-    property LastError: DWORD read fLastError;
-    property Name: String read fName;
   end;
 
 {===============================================================================
@@ -178,7 +210,7 @@ type
     TEvent - class declaration
 ===============================================================================}
 type
-  TEvent = class(TWinSyncObject)
+  TEvent = class(TSimpleWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset, InitialState: Boolean; const Name: String); overload;
     constructor Create(const Name: String); overload;
@@ -204,7 +236,7 @@ type
     TMutex - class declaration
 ===============================================================================}
 type
-  TMutex = class(TWinSyncObject)
+  TMutex = class(TSimpleWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialOwner: Boolean; const Name: String); overload;
     constructor Create(const Name: String); overload;
@@ -224,7 +256,7 @@ type
     TSemaphore - class declaration
 ===============================================================================}
 type
-  TSemaphore = class(TWinSyncObject)
+  TSemaphore = class(TSimpleWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialCount, MaximumCount: Integer; const Name: String); overload;
     constructor Create(InitialCount, MaximumCount: Integer; const Name: String); overload;
@@ -248,7 +280,7 @@ type
   TTimerAPCRoutine = procedure(ArgToCompletionRoutine: Pointer; TimerLowValue, TimerHighValue: DWORD); stdcall;
   PTimerAPCRoutine = ^TTimerAPCRoutine;
 
-  TWaitableTimer = class(TWinSyncObject)
+  TWaitableTimer = class(TSimpleWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String); overload;
     constructor Create(const Name: String); overload;
@@ -305,6 +337,7 @@ type
   When WaitAll is true, value of Index is undefined except for wrError, where
   it again contains system error number.
 }
+(*
 Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult; overload;
@@ -327,7 +360,7 @@ Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boole
 Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-
+*)
 
 {
   WaitResultToStr simply returns textual representation of a given wait result.
@@ -429,7 +462,7 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 {===============================================================================
-    TWinSyncObject - class implentation
+    TWinSyncObject - class declaration
 ===============================================================================}
 {-------------------------------------------------------------------------------
     TWinSyncObject - protected methods
@@ -437,70 +470,95 @@ end;
 
 Function TWinSyncObject.SetAndRectifyName(const Name: String): Boolean;
 begin
-{
-  Names should not contain backslashes (\, #92), but they can separate prefixes,
-  so in theory they are allowed - do not replace them, leave this responsibility
-  on the user.
-}
 fName := Name;
-If Length(fName) > MAX_PATH then
-  SetLength(fName,MAX_PATH);
-Result := Length(fName) > 0;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TWinSyncObject.SetAndCheckHandle(Handle: THandle);
-begin
-fHandle := Handle;
-If fHandle = 0 then
-  begin
-    fLastError := GetLastError;
-    RaiseLastOSError;
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TWinSyncObject.DuplicateAndSetHandleFrom(SourceProcess: THandle; SourceHandle: THandle);
-var
-  NewHandle:  THandle;
-begin
-If DuplicateHandle(SourceProcess,SourceHandle,GetCurrentProcess,@NewHandle,0,False,DUPLICATE_SAME_ACCESS) then
-  SetAndCheckHandle(NewHandle)
-else
-  raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateHandleFrom: Handle duplication failed (0x%.8x).',[GetLastError]);
+Result := True;
 end;
 
 {-------------------------------------------------------------------------------
     TWinSyncObject - public methods
 -------------------------------------------------------------------------------}
 
-constructor TWinSyncObject.CreateFrom(Handle: THandle{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+constructor TWinSyncObject.Create;
 begin
 inherited Create;
-fHandle := Handle;
-If fHandle = 0 then
-  raise EWSOInvalidHandle.Create('TWinSyncObject.CreateFrom: Null handle.');
+fLastError := 0;
+fName := '';
+end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                              TSimpleWinSyncObject
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TSimpleWinSyncObject - class implentation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TSimpleWinSyncObject - protected methods
+-------------------------------------------------------------------------------}
+
+Function TSimpleWinSyncObject.SetAndRectifyName(const Name: String): Boolean;
+begin
+inherited SetAndRectifyName(Name);  // only sets the fName field
+{
+  Names should not contain backslashes (\, #92), but they can separate
+  prefixes, so in theory they are allowed - do not replace them, leave this
+  responsibility on the user.
+}
+Result := Length(fName) > 0;
 end;
 
 //------------------------------------------------------------------------------
 
-constructor TWinSyncObject.DuplicateFrom(SourceHandle: THandle);
+procedure TSimpleWinSyncObject.SetAndCheckHandle(Handle: THandle);
+begin
+If Handle <> 0 then
+  fHandle := Handle
+else
+  raise EWSOInvalidHandle.CreateFmt('TSimpleWinSyncObject.SetAndCheckHandle: Null handle (0x%.8x).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TSimpleWinSyncObject.DuplicateAndSetHandleFrom(SourceProcess: THandle; SourceHandle: THandle);
+var
+  NewHandle:  THandle;
+begin
+If DuplicateHandle(SourceProcess,SourceHandle,GetCurrentProcess,@NewHandle,0,False,DUPLICATE_SAME_ACCESS) then
+  SetAndCheckHandle(NewHandle)
+else
+  raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateAndSetHandleFrom: Handle duplication failed (0x%.8x).',[GetLastError]);
+end;
+
+{-------------------------------------------------------------------------------
+    TSimpleWinSyncObject - public methods
+-------------------------------------------------------------------------------}
+
+constructor TSimpleWinSyncObject.CreateFrom(Handle: THandle{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+inherited Create;
+fHandle := Handle;
+If fHandle = 0 then
+  raise EWSOInvalidHandle.Create('TSimpleWinSyncObject.CreateFrom: Null handle.');
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TSimpleWinSyncObject.DuplicateFrom(SourceHandle: THandle);
 begin
 DuplicateFromProcess(GetCurrentProcess,SourceHandle);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-constructor TWinSyncObject.DuplicateFrom(SourceWinSyncObject: TWinSyncObject);
+constructor TSimpleWinSyncObject.DuplicateFrom(SourceObject: TSimpleWinSyncObject);
 begin
-DuplicateFrom(SourceWinSyncObject.Handle);
+DuplicateFrom(SourceObject.Handle);
 end;
 
 //------------------------------------------------------------------------------
 
-constructor TWinSyncObject.DuplicateFromProcess(SourceProcess: THandle; SourceHandle: THandle);
+constructor TSimpleWinSyncObject.DuplicateFromProcess(SourceProcess: THandle; SourceHandle: THandle);
 begin
 inherited Create;
 DuplicateAndSetHandleFrom(SourceProcess,SourceHandle);
@@ -508,7 +566,7 @@ end;
 
 //------------------------------------------------------------------------------
 
-constructor TWinSyncObject.DuplicateFromProcessID(SourceProcessID: DWORD; SourceHandle: THandle);
+constructor TSimpleWinSyncObject.DuplicateFromProcessID(SourceProcessID: DWORD; SourceHandle: THandle);
 var
   SourceProcess:  THandle;
 begin
@@ -520,12 +578,12 @@ If SourceProcess <> 0 then
   finally
     CloseHandle(SourceProcess);
   end
-else raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateFromProcessID: Failed to open source process (0x%.8x).',[GetLastError]);
+else raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateFromProcessID: Failed to open source process (0x%.8x).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
 
-destructor TWinSyncObject.Destroy;
+destructor TSimpleWinSyncObject.Destroy;
 begin
 CloseHandle(fHandle);
 inherited;
@@ -533,15 +591,15 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TWinSyncObject.DuplicateForProcess(TargetProcess: THandle): THandle;
+Function TSimpleWinSyncObject.DuplicateForProcess(TargetProcess: THandle): THandle;
 begin
 If not DuplicateHandle(GetCurrentProcess,fHandle,TargetProcess,@Result,0,False,DUPLICATE_SAME_ACCESS) then
-  raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateForProcess: Handle duplication failed (0x%.8x).',[GetLastError]);
+  raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateForProcess: Handle duplication failed (0x%.8x).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
 
-Function TWinSyncObject.DuplicateForProcessID(TargetProcessID: DWORD): THandle;
+Function TSimpleWinSyncObject.DuplicateForProcessID(TargetProcessID: DWORD): THandle;
 var
   TargetProcess:  THandle;
 begin
@@ -552,12 +610,12 @@ If TargetProcess <> 0 then
   finally
     CloseHandle(TargetProcess);
   end
-else raise EWSOHandleDuplicationError.CreateFmt('TWinSyncObject.DuplicateForProcessID: Failed to open target process (0x%.8x).',[GetLastError]);
+else raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateForProcessID: Failed to open target process (0x%.8x).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
 
-Function TWinSyncObject.WaitFor(Timeout: DWORD; out ErrCode: DWORD; Alertable: Boolean = False): TWaitResult;
+Function TSimpleWinSyncObject.WaitFor(Timeout: DWORD; out ErrCode: DWORD; Alertable: Boolean = False): TWaitResult;
 begin
 ErrCode := 0;
 case WaitForSingleObjectEx(fHandle,Timeout,Alertable) of
@@ -577,7 +635,7 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-Function TWinSyncObject.WaitFor(Timeout: DWORD = INFINITE; Alertable: Boolean = False): TWaitResult;
+Function TSimpleWinSyncObject.WaitFor(Timeout: DWORD = INFINITE; Alertable: Boolean = False): TWaitResult;
 begin
 Result := WaitFor(Timeout,fLastError,Alertable);
 end;
@@ -599,9 +657,9 @@ constructor TEvent.Create(SecurityAttributes: PSecurityAttributes; ManualReset, 
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,PChar(StrToWin(fName))))
+  SetAndCheckHandle(CreateEventW(SecurityAttributes,ManualReset,InitialState,PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateEvent(SecurityAttributes,ManualReset,InitialState,nil));
+  SetAndCheckHandle(CreateEventW(SecurityAttributes,ManualReset,InitialState,nil));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -624,7 +682,7 @@ constructor TEvent.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name
 begin
 inherited Create;
 SetAndRectifyName(Name);
-SetAndCheckHandle(OpenEvent(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
+SetAndCheckHandle(OpenEventW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -700,9 +758,9 @@ constructor TMutex.Create(SecurityAttributes: PSecurityAttributes; InitialOwner:
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateMutex(SecurityAttributes,RectBool(InitialOwner),PChar(StrToWin(fName))))
+  SetAndCheckHandle(CreateMutexW(SecurityAttributes,RectBool(InitialOwner),PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateMutex(SecurityAttributes,RectBool(InitialOwner),nil));
+  SetAndCheckHandle(CreateMutexW(SecurityAttributes,RectBool(InitialOwner),nil));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -725,7 +783,7 @@ constructor TMutex.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name
 begin
 inherited Create;
 SetAndRectifyName(Name);
-SetAndCheckHandle(OpenMutex(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
+SetAndCheckHandle(OpenMutexW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -770,9 +828,9 @@ constructor TSemaphore.Create(SecurityAttributes: PSecurityAttributes; InitialCo
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,PChar(StrToWin(fName))))
+  SetAndCheckHandle(CreateSemaphoreW(SecurityAttributes,InitialCount,MaximumCount,PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateSemaphore(SecurityAttributes,InitialCount,MaximumCount,nil));
+  SetAndCheckHandle(CreateSemaphoreW(SecurityAttributes,InitialCount,MaximumCount,nil));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -795,7 +853,7 @@ constructor TSemaphore.Open(DesiredAccess: LongWord; InheritHandle: Boolean; con
 begin
 inherited Create;
 SetAndRectifyName(Name);
-SetAndCheckHandle(OpenSemaphore(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
+SetAndCheckHandle(OpenSemaphoreW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -849,9 +907,9 @@ constructor TWaitableTimer.Create(SecurityAttributes: PSecurityAttributes; Manua
 begin
 inherited Create;
 If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,PChar(StrToWin(fName))))
+  SetAndCheckHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateWaitableTimer(SecurityAttributes,ManualReset,nil));
+  SetAndCheckHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,nil));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -874,7 +932,7 @@ constructor TWaitableTimer.Open(DesiredAccess: DWORD; InheritHandle: Boolean; co
 begin
 inherited Create;
 SetAndRectifyName(Name);
-SetAndCheckHandle(OpenWaitableTimer(DesiredAccess,InheritHandle,PChar(StrToWin(fName))));
+SetAndCheckHandle(OpenWaitableTimerW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -907,7 +965,7 @@ end;
 {$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
 Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
 
-  Function DateTimeToFileTime(DateTime: TDateTime): FileTime;
+  Function DateTimeToFileTime(DateTime: TDateTime): TFileTime;
   var
     LocalTime:  TFileTime;
     SystemTime: TSystemTime;
@@ -918,9 +976,11 @@ Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; Co
     If SystemTimeToFileTime(SystemTime,LocalTime) then
       begin
         If not LocalFileTimeToFileTime(LocalTime,Result) then
-          raise EWSOTimeConversionError.CreateFmt('LocalFileTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
+          raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.SetWaitableTimer.DateTimeToFileTime: ' +
+            'LocalFileTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
       end
-    else raise EWSOTimeConversionError.CreateFmt('SystemTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
+    else raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.SetWaitableTimer.DateTimeToFileTime: ' +
+           'SystemTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
   end;
 
 begin
@@ -959,7 +1019,7 @@ const
 
 const
   MAXIMUM_WAIT_OBJECTS = 3; {$message 'debug'}
-
+(*
 {===============================================================================
     Utility functions - waiter thread declaration
 ===============================================================================}
@@ -1509,7 +1569,7 @@ Result := WaitForMultipleObjects_Internal(Objects,WaitAll,INFINITE,Index,False,[
 end;
 
 //------------------------------------------------------------------------------
-
+*)
 Function WaitResultToStr(WaitResult: TWaitResult): String;
 const
   WR_STRS: array[TWaitResult] of String = ('Signaled','Abandoned','IOCompletion','Message','Timeout','Error');
