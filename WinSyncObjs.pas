@@ -74,7 +74,7 @@ interface
 
 uses
   Windows, SysUtils,
-  AuxClasses;
+  AuxTypes, AuxClasses;
 
 const
   SEMAPHORE_MODIFY_STATE = $00000002;
@@ -96,6 +96,9 @@ type
   EWSOWaitError              = class(EWSOException);
   EWSOInvalidHandle          = class(EWSOException);
   EWSOHandleDuplicationError = class(EWSOException);
+  EWSOOpenError              = class(EWSOException);
+  EWSOUnsupportedObject      = class(EWSOException);
+  EWSOAutorunError           = class(EWSOException);
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -135,7 +138,7 @@ type
   protected
     fLastError: DWORD;
     fName:      String;
-    Function SetAndRectifyName(const Name: String): Boolean; virtual;
+    Function RectifyAndSetName(const Name: String): Boolean; virtual;
   public
     constructor Create;
   {
@@ -144,22 +147,6 @@ type
   }
     property LastError: DWORD read fLastError;
     property Name: String read fName;
-  end;
-
-{===============================================================================
---------------------------------------------------------------------------------
-                              TComplexWinSyncObject
---------------------------------------------------------------------------------
-===============================================================================}
-{===============================================================================
-    TComplexWinSyncObject - class declaration
-===============================================================================}
-type
-  TComplexWinSyncObject = class(TCustomObject)
-  protected
-    fProcessShared: Boolean;
-  public
-    property ProcessShared: Boolean read fProcessShared;
   end;
 
 {===============================================================================
@@ -174,8 +161,8 @@ type
   TSimpleWinSyncObject = class(TWinSyncObject)
   protected
     fHandle:  THandle;
-    Function SetAndRectifyName(const Name: String): Boolean; override;
-    procedure SetAndCheckHandle(Handle: THandle); virtual;
+    Function RectifyAndSetName(const Name: String): Boolean; override;
+    procedure CheckAndSetHandle(Handle: THandle); virtual;
     procedure DuplicateAndSetHandleFrom(SourceProcess: THandle; SourceHandle: THandle); virtual;
   public
     constructor CreateFrom(Handle: THandle{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
@@ -296,6 +283,135 @@ type
 
 {===============================================================================
 --------------------------------------------------------------------------------
+                              TComplexWinSyncObject
+--------------------------------------------------------------------------------
+===============================================================================}
+type
+  TWSOSharedData = packed array[0..31] of Byte;
+  PWSOSharedData = ^TWSOSharedData;
+
+{===============================================================================
+    TComplexWinSyncObject - class declaration
+===============================================================================}
+type
+  TComplexWinSyncObject = class(TWinSyncObject)
+  protected
+    fProcessShared: Boolean;
+    procedure CheckAndSetHandle(var Destination: THandle; Handle: THandle); virtual;
+    Function AllocateSharedData: Pointer; virtual; abstract;
+    procedure DeallocateSharedData; virtual; abstract;
+  public
+    property ProcessShared: Boolean read fProcessShared;
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                               TConditionVariable
+--------------------------------------------------------------------------------
+===============================================================================}
+type
+  TWSOCondData = record
+    WaiterCount:  UInt32;
+    WakeCycle:    UInt32;
+    SharedData:   TWSOSharedData;
+  end;
+  PWSOCondData = ^TWSOCondData;
+
+  // types for autorun
+  TWSOWakeOption = (woWakeOne,woWakeAll,woBeforeUnlock);
+  TWSOWakeOptions = set of TWSOWakeOption;
+
+  TWSOPredicateCheckEvent = procedure(Sender: TObject; var Predicate: Boolean) of object;
+  TWSOPredicateCheckCallback = procedure(Sender: TObject; var Predicate: Boolean);
+
+  TWSODataAccessEvent = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions) of object;
+  TWSODataAccessCallback = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions);
+
+// because there are incorrect declarations...
+Function SignalObjectAndWait(hObjectToSignal: THandle; hObjectToWaitOn: THandle; dwMilliseconds: DWORD; bAlertable: BOOL): DWORD; stdcall; external kernel32;
+
+{===============================================================================
+    TConditionVariable - class declaration
+===============================================================================}
+type
+  TConditionVariable = class(TComplexWinSyncObject)
+  protected
+    fWaitLock:                  THandle;        // semaphore
+    fCondData:                  TWSOCondData;
+    fCondDataPtr:               PWSOCondData;
+    fPointersResolved:          Boolean;        // leave it for integrity protection
+    // autorun events
+    fOnPredicateCheckEvent:     TWSOPredicateCheckEvent;
+    fOnPredicateCheckCallback:  TWSOPredicateCheckCallback;
+    fOnDataAccessEvent:         TWSODataAccessEvent;
+    fOnDataAccessCallback:      TWSODataAccessCallback;
+    Function GetSharedDataPtr: PWSOSharedData; virtual;
+    Function RectifyAndSetName(const Name: String): Boolean; override;
+    procedure SelectWake(WakeOptions: TWSOWakeOptions); virtual;
+    procedure ResolvePointers; virtual;
+    Function DoOnPredicateCheck: Boolean; virtual;
+    Function DoOnDataAccess: TWSOWakeOptions; virtual;
+  public
+    constructor Create(SecurityAttributes: PSecurityAttributes; const Name: String); overload; virtual;
+    constructor Create(const Name: String); overload;
+    // DesiredAccess is automatically combined with SEMAPHORE_MODIFY_STATE
+    constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload; virtual;
+    constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
+    destructor Destroy; override;
+  {
+    First overload of Sleep method only supports mutex object as Synchronizer
+    parameter - it is because the object must be signaled and different objects
+    have different functions for that, and there is no way of discerning which
+    object is hidden behind the handle.
+    ...well, the is a way, but it involves function NtQueryObject which should
+    not be used in applications, so let's avoid it.
+
+    Second methods allows for event, mutex and semaphore object to be used
+    as synchronizer.
+  }
+    procedure Sleep(Synchronizer: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
+    procedure Sleep(Synchronizer: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
+    procedure Wake; virtual;
+    procedure WakeAll; virtual;
+  {
+    Allowed types of synchronizers are the same as in corresponding Sleep
+    methods.
+  }
+    procedure AutoRun(Synchronizer: THandle); overload; virtual;
+    procedure AutoRun(Synchronizer: TSimpleWinSyncObject); overload; virtual;
+    property SharedDataPtr: PWSOSharedData read GetSharedDataPtr;
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                              TConditionVariableEx
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TConditionVariableEx - class declaration
+===============================================================================}
+type
+  TConditionVariableEx = class(TConditionVariable)
+  protected
+    fDataLock:  THandle;  // mutex
+  public
+  {
+    Parameters SecurityAttributes and DesiredAccess are used for both
+    synchronizers (mutex and semaphore).
+
+    Note that DesiredAccess is always automatically combined with
+    MUTEX_MODIFY_STATE or SEMAPHORE_MODIFY_STATE.
+  }
+    constructor Create(SecurityAttributes: PSecurityAttributes; const Name: String); override;
+    constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); override;
+    //procedure Lock; virtual;
+    //procedure Unlock; virtual;
+    //procedure Sleep(Timeout: DWORD = INFINITE); overload; virtual;
+    //procedure AutoRun; overload; virtual;    
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
                                Utility functions
 --------------------------------------------------------------------------------
 ===============================================================================}
@@ -373,13 +489,33 @@ implementation
 
 uses
   Classes, Math,
-  AuxTypes, StrRect;
+  StrRect, InterlockedOps;
 
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
   {$DEFINE W5057:={$WARN 5057 OFF}} // Local variable "$1" does not seem to be initialized
   {$DEFINE W5058:={$WARN 5058 OFF}} // Variable "$1" does not seem to be initialized
 {$ENDIF}
+
+{===============================================================================
+    Internals
+===============================================================================}
+{$IF not Declared(UNICODE_STRING_MAX_CHARS)}
+const
+  UNICODE_STRING_MAX_CHARS = 32767;
+{$IFEND}
+
+//------------------------------------------------------------------------------
+{
+  Workaround for known WinAPI bug - CreateMutex only recognizes BOOL(1) as
+  true, everything else, including what Delphi/FPC puts there (ie. BOOL(-1)),
+  is wrongly seen as false. :/
+}
+Function RectBool(Value: Boolean): BOOL;
+begin
+If Value then Result := BOOL(1)
+  else Result := BOOL(0);
+end;
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -409,7 +545,7 @@ fSpinCount := 0;
 InitializeCriticalSection(fCriticalSectionObj);
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TCriticalSection.Create(SpinCount: DWORD);
 begin
@@ -468,7 +604,7 @@ end;
     TWinSyncObject - protected methods
 -------------------------------------------------------------------------------}
 
-Function TWinSyncObject.SetAndRectifyName(const Name: String): Boolean;
+Function TWinSyncObject.RectifyAndSetName(const Name: String): Boolean;
 begin
 fName := Name;
 Result := True;
@@ -497,25 +633,30 @@ end;
     TSimpleWinSyncObject - protected methods
 -------------------------------------------------------------------------------}
 
-Function TSimpleWinSyncObject.SetAndRectifyName(const Name: String): Boolean;
+Function TSimpleWinSyncObject.RectifyAndSetName(const Name: String): Boolean;
 begin
-inherited SetAndRectifyName(Name);  // only sets the fName field
+inherited RectifyAndSetName(Name);  // only sets the fName field
 {
   Names should not contain backslashes (\, #92), but they can separate
   prefixes, so in theory they are allowed - do not replace them, leave this
   responsibility on the user.
+
+  Wide-string version of WinAPI functions are used, but there is still strict
+  limit of 32767 wide characters in a string.
 }
+If Length(fName) > UNICODE_STRING_MAX_CHARS then
+  SetLength(fName,UNICODE_STRING_MAX_CHARS);
 Result := Length(fName) > 0;
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TSimpleWinSyncObject.SetAndCheckHandle(Handle: THandle);
+procedure TSimpleWinSyncObject.CheckAndSetHandle(Handle: THandle);
 begin
 If Handle <> 0 then
   fHandle := Handle
 else
-  raise EWSOInvalidHandle.CreateFmt('TSimpleWinSyncObject.SetAndCheckHandle: Null handle (0x%.8x).',[GetLastError]);
+  raise EWSOInvalidHandle.CreateFmt('TSimpleWinSyncObject.CheckAndSetHandle: Null handle (0x%.8x).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -525,7 +666,7 @@ var
   NewHandle:  THandle;
 begin
 If DuplicateHandle(SourceProcess,SourceHandle,GetCurrentProcess,@NewHandle,0,False,DUPLICATE_SAME_ACCESS) then
-  SetAndCheckHandle(NewHandle)
+  CheckAndSetHandle(NewHandle)
 else
   raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateAndSetHandleFrom: Handle duplication failed (0x%.8x).',[GetLastError]);
 end;
@@ -656,20 +797,20 @@ end;
 constructor TEvent.Create(SecurityAttributes: PSecurityAttributes; ManualReset, InitialState: Boolean; const Name: String);
 begin
 inherited Create;
-If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateEventW(SecurityAttributes,ManualReset,InitialState,PWideChar(StrToWide(fName))))
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(CreateEventW(SecurityAttributes,ManualReset,InitialState,PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateEventW(SecurityAttributes,ManualReset,InitialState,nil));
+  CheckAndSetHandle(CreateEventW(SecurityAttributes,ManualReset,InitialState,nil));
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TEvent.Create(const Name: String);
 begin
 Create(nil,True,False,Name);
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TEvent.Create;
 begin
@@ -681,11 +822,13 @@ end;
 constructor TEvent.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
 begin
 inherited Create;
-SetAndRectifyName(Name);
-SetAndCheckHandle(OpenEventW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(OpenEventW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))))
+else
+  raise EWSOOpenError.Create('TEvent.Open: Empty name not allowed.');
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TEvent.Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
 begin
@@ -744,33 +887,22 @@ end;
 -------------------------------------------------------------------------------}
 
 constructor TMutex.Create(SecurityAttributes: PSecurityAttributes; InitialOwner: Boolean; const Name: String);
-{
-  Workaround for known WinAPI bug - CreateMutex only recognizes BOOL(1) as
-  true, everything else, including what Delphi/FPC puts there (ie. BOOL(-1)),
-  is wrongly seen as false. :/
-}
-  Function RectBool(Value: Boolean): BOOL;
-  begin
-    If Value then Result := BOOL(1)
-      else Result := BOOL(0);
-  end;
-
 begin
 inherited Create;
-If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateMutexW(SecurityAttributes,RectBool(InitialOwner),PWideChar(StrToWide(fName))))
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(CreateMutexW(SecurityAttributes,RectBool(InitialOwner),PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateMutexW(SecurityAttributes,RectBool(InitialOwner),nil));
+  CheckAndSetHandle(CreateMutexW(SecurityAttributes,RectBool(InitialOwner),nil));
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TMutex.Create(const Name: String);
 begin
 Create(nil,False,Name);
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TMutex.Create;
 begin
@@ -782,11 +914,13 @@ end;
 constructor TMutex.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
 begin
 inherited Create;
-SetAndRectifyName(Name);
-SetAndCheckHandle(OpenMutexW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(OpenMutexW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))))
+else
+  raise EWSOOpenError.Create('TMutex.Open: Empty name not allowed.');
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TMutex.Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
 begin
@@ -827,20 +961,20 @@ end;
 constructor TSemaphore.Create(SecurityAttributes: PSecurityAttributes; InitialCount, MaximumCount: Integer; const Name: String);
 begin
 inherited Create;
-If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateSemaphoreW(SecurityAttributes,InitialCount,MaximumCount,PWideChar(StrToWide(fName))))
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(CreateSemaphoreW(SecurityAttributes,InitialCount,MaximumCount,PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateSemaphoreW(SecurityAttributes,InitialCount,MaximumCount,nil));
+  CheckAndSetHandle(CreateSemaphoreW(SecurityAttributes,InitialCount,MaximumCount,nil));
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TSemaphore.Create(InitialCount, MaximumCount: Integer; const Name: String);
 begin
 Create(nil,InitialCount,MaximumCount,Name);
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TSemaphore.Create(InitialCount, MaximumCount: Integer);
 begin
@@ -852,11 +986,13 @@ end;
 constructor TSemaphore.Open(DesiredAccess: LongWord; InheritHandle: Boolean; const Name: String);
 begin
 inherited Create;
-SetAndRectifyName(Name);
-SetAndCheckHandle(OpenSemaphoreW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(OpenSemaphoreW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))))
+else
+  raise EWSOOpenError.Create('TSemaphore.Open: Empty name not allowed.');
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TSemaphore.Open(const Name: String);
 begin
@@ -881,7 +1017,7 @@ If not Result then
   fLastError := GetLastError;
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TSemaphore.ReleaseSemaphore: Boolean;
 var
@@ -906,20 +1042,20 @@ end;
 constructor TWaitableTimer.Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String);
 begin
 inherited Create;
-If SetAndRectifyName(Name) then
-  SetAndCheckHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,PWideChar(StrToWide(fName))))
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,PWideChar(StrToWide(fName))))
 else
-  SetAndCheckHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,nil));
+  CheckAndSetHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,nil));
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TWaitableTimer.Create(const Name: String);
 begin
 Create(nil,True,Name);
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TWaitableTimer.Create;
 begin
@@ -931,11 +1067,13 @@ end;
 constructor TWaitableTimer.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
 begin
 inherited Create;
-SetAndRectifyName(Name);
-SetAndCheckHandle(OpenWaitableTimerW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))));
+If RectifyAndSetName(Name) then
+  CheckAndSetHandle(OpenWaitableTimerW(DesiredAccess,InheritHandle,PWideChar(StrToWide(fName))))
+else
+  raise EWSOOpenError.Create('TWaitableTimer.Open: Empty name not allowed.');
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TWaitableTimer.Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
 begin
@@ -953,14 +1091,14 @@ If not Result then
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer = 0): Boolean;
 begin
 Result := SetWaitableTimer(DueTime,Period,nil,nil,False);
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 {$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
 Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
@@ -990,7 +1128,7 @@ If not Result then
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0): Boolean;
 begin
@@ -1005,6 +1143,354 @@ Result := Windows.CancelWaitableTimer(fHandle);
 If not Result then
   fLastError := GetLastError;
 end;
+
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                              TComplexWinSyncObject
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TComplexWinSyncObject - class implementation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TComplexWinSyncObject - protected methods
+-------------------------------------------------------------------------------}
+
+procedure TComplexWinSyncObject.CheckAndSetHandle(var Destination: THandle; Handle: THandle);
+begin
+If Handle <> 0 then
+  Destination := Handle
+else
+  raise EWSOInvalidHandle.CreateFmt('TComplexWinSyncObject.CheckAndSetHandle: Null handle (0x%.8x).',[GetLastError]);
+end;
+
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                               TConditionVariable
+--------------------------------------------------------------------------------
+===============================================================================}
+const
+  WSO_COND_PREFIX_DATALOCK = 'condvar_datalock_';
+  WSO_COND_PREFIX_WAITLOCK = 'condvar_waitlock_';
+  
+{===============================================================================
+    TConditionVariable - class implementation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TConditionVariable - protected methods
+-------------------------------------------------------------------------------}
+
+Function TConditionVariable.GetSharedDataPtr: PWSOSharedData;
+begin
+Result := Addr(fCondDataPtr^.SharedData);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TConditionVariable.RectifyAndSetName(const Name: String): Boolean;
+begin
+inherited RectifyAndSetName(Name);  // should be always true
+// note that WSO_COND_PREFIX_WAITLOCK has the same length
+If (Length(fName) + Max(Length(WSO_COND_PREFIX_DATALOCK),Length(WSO_COND_PREFIX_WAITLOCK))) > UNICODE_STRING_MAX_CHARS then
+  SetLength(fName,UNICODE_STRING_MAX_CHARS - Max(Length(WSO_COND_PREFIX_DATALOCK),Length(WSO_COND_PREFIX_WAITLOCK)));
+Result := Length(fName) > 0;
+fProcessShared := Result;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariable.SelectWake(WakeOptions: TWSOWakeOptions);
+begin
+If ([woWakeOne,woWakeAll] *{intersection} WakeOptions) <> [] then
+  begin
+    If woWakeAll in WakeOptions then
+      WakeAll
+    else
+      Wake;
+  end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariable.ResolvePointers;
+begin
+If fProcessShared then
+  fCondDataPtr := AllocateSharedData
+else
+  fCondDataPtr := Addr(fCondData);
+fPointersResolved := True;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TConditionVariable.DoOnPredicateCheck: Boolean;
+begin
+Result := False;
+If Assigned(fOnPredicateCheckEvent) then
+  fOnPredicateCheckEvent(Self,Result);
+If Assigned(fOnPredicateCheckCallback) then
+  fOnPredicateCheckCallback(Self,Result);  
+end;
+
+//------------------------------------------------------------------------------
+
+Function TConditionVariable.DoOnDataAccess: TWSOWakeOptions;
+begin
+Result := [];
+If Assigned(fOnDataAccessEvent) then
+  fOnDataAccessEvent(Self,Result);
+If Assigned(fOnDataAccessCallback) then
+  fOnDataAccessCallback(Self,Result);
+end;
+
+{-------------------------------------------------------------------------------
+    TConditionVariable - public methods
+-------------------------------------------------------------------------------}
+
+constructor TConditionVariable.Create(SecurityAttributes: PSecurityAttributes; const Name: String);
+begin
+inherited Create;
+If RectifyAndSetName(Name) then
+{
+  process-shared
+
+  $7FFFFFFF is maximum, anything higher will cause invalid parameter error.
+
+  But seriously, if you manage to enter waiting in more than two billion
+  threads, you are doing something wrong... or stop using this ancient code
+  on Windows 40K, God Emperor of Mankind does not approve!
+}
+  CheckAndSetHandle(fWaitLock,CreateSemaphoreW(SecurityAttributes,0,DWORD($7FFFFFFF),PWideChar(StrToWide(WSO_COND_PREFIX_WAITLOCK + fName))))
+else
+  // thread-shared
+  CheckAndSetHandle(fWaitLock,CreateSemaphoreW(SecurityAttributes,0,DWORD($7FFFFFFF),nil));
+ResolvePointers;
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TConditionVariable.Create(const Name: String);
+begin
+Create(nil,Name);
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TConditionVariable.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
+begin
+inherited Create;
+If RectifyAndSetName(Name) then
+  begin
+    CheckAndSetHandle(fWaitLock,OpenSemaphoreW(DesiredAccess or SEMAPHORE_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(WSO_COND_PREFIX_WAITLOCK + fName))));
+    ResolvePointers;
+  end
+else raise EWSOOpenError.Create('TConditionVariable.Open: Empty name not allowed.');
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TConditionVariable.Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+Open(SYNCHRONIZE,False,Name);
+end;
+
+//------------------------------------------------------------------------------
+
+destructor TConditionVariable.Destroy;
+begin
+If fProcessShared and fPointersResolved then
+  DeallocateSharedData;
+inherited;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariable.Sleep(Synchronizer: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+
+  Function InternalWait(FirstWait: Boolean): Boolean;
+  begin
+    If FirstWait then
+      Result := SignalObjectAndWait(Synchronizer,fWaitLock,Timeout,Alertable) = WAIT_OBJECT_0
+    else
+      Result := WaitForSingleObjectEx(fWaitLock,Timeout,Alertable) = WAIT_OBJECT_0
+  end;
+
+var
+  WakeCycleOnEnter: UInt32;
+  WakeCycleCurrent: UInt32;
+  FirstWait:        Boolean;
+  ExitWait:         Boolean;
+begin
+FirstWait := True;
+ExitWait := False;
+// add this waiting to a waiter counter
+InterlockedIncrement(fCondDataPtr^.WaiterCount);
+try
+  repeat
+  {
+    If here for the first time, signal/unlock the synchronizer and enter
+    waiting on the wait lock (semaphore).
+    If this is not the first time, the synchronizer is already unlocked so
+    only enter waiting on wait lock.
+  }
+    If InternalWait(FirstWait) then
+      begin
+      {
+        Wait lock became signaled - the semafore had value of 1 or greater
+        (past tense because the waiting decremented it, so it is now less,
+        possibly 0).
+      }
+        ExitWait := True
+      end
+    else ExitWait := True;  // timeout, IO, error (spurious wakeup)
+    FirstWait := False;
+  until ExitWait;
+finally
+  // remove this waiting from a waiter counter.
+  InterlockedDecrement(fCondDataPtr^.WaiterCount);
+end;
+// lock the synchronizer
+If not WaitForSingleObject(Synchronizer,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED] then
+  raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep: Failed to lock synchronizer (0x%.8x)',[GetLastError]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TConditionVariable.Sleep(Synchronizer: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+begin
+If (Synchronizer is TEvent) or (Synchronizer is TMutex) or (Synchronizer is TSemaphore) then
+  Sleep(Synchronizer.Handle,Timeout,Alertable)
+else
+  raise EWSOUnsupportedObject.CreateFmt('TConditionVariable.Sleep: Synchronizer is of unsupported object (%s),',[Synchronizer.ClassName]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariable.Wake;
+begin
+//InterlockedIncrement32(fWakeCyclePtr);
+//If InterlockedLoad32(fWaiterCountPtr) >= 1 then
+//  ReleaseSemaphore(fWaitLock,0,nil);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariable.WakeAll;
+begin
+{$message 'implement'}
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariable.AutoRun(Synchronizer: THandle);
+var
+  WakeOptions:  TWSOWakeOptions;
+begin
+If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckEvent) then
+  begin
+    // lock synchronizer
+    If WaitForSingleObject(Synchronizer,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED] then
+      begin
+        // test predicate and wait condition
+        while not DoOnPredicateCheck do
+          Sleep(Synchronizer,INFINITE);
+        // access protected data
+        WakeOptions := DoOnDataAccess;
+        // wake waiters before unlock
+        If (woBeforeUnlock in WakeOptions) then
+          SelectWake(WakeOptions);
+        // unlock synchronizer
+        If not ReleaseMutex(Synchronizer) then
+          raise EWSOAutorunError.CreateFmt('TConditionVariable.AutoRun: Failed to unlock synchronizer (0x%.8x).',[GetLastError]);
+        // wake waiters after unlock
+        If not(woBeforeUnlock in WakeOptions) then
+          SelectWake(WakeOptions);
+      end
+    else raise EWSOAutorunError.CreateFmt('TConditionVariable.AutoRun: Failed to lock synchronizer (0x%.8x).',[GetLastError]);
+  end;
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TConditionVariable.AutoRun(Synchronizer: TSimpleWinSyncObject);
+var
+  WakeOptions:  TWSOWakeOptions;
+  ReleaseRes:   Boolean;
+begin
+If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
+  begin
+    If (Synchronizer is TEvent) or (Synchronizer is TMutex) or (Synchronizer is TSemaphore) then
+      begin
+        // lock synchronizer
+        If Synchronizer.WaitFor(INFINITE,False) in [wrSignaled,wrAbandoned] then
+          begin
+            // test predicate and wait condition
+            while not DoOnPredicateCheck do
+              Sleep(Synchronizer,INFINITE);
+            // access protected data
+            WakeOptions := DoOnDataAccess;
+            // wake waiters before unlock
+            If (woBeforeUnlock in WakeOptions) then
+              SelectWake(WakeOptions);
+            // unlock synchronizer
+            If Synchronizer is TEvent then
+              ReleaseRes := TEvent(Synchronizer).SetEvent
+            else If Synchronizer is TMutex then
+              ReleaseRes := TMutex(Synchronizer).ReleaseMutex
+            else
+              ReleaseRes := TSemaphore(Synchronizer).ReleaseSemaphore;
+            If not ReleaseRes then
+            raise EWSOAutorunError.CreateFmt('TConditionVariable.AutoRun: Failed to unlock synchronizer (0x%.8x).',[GetLastError]);
+            // wake waiters after unlock
+            If not(woBeforeUnlock in WakeOptions) then
+              SelectWake(WakeOptions);
+          end
+        else raise EWSOAutorunError.CreateFmt('TConditionVariable.AutoRun: Failed to lock synchronizer (0x%.8x).',[Synchronizer.LastError]);
+      end
+    else raise EWSOUnsupportedObject.CreateFmt('TConditionVariable.AutoRun: Synchronizer is of unsupported class (%s),',[Synchronizer.ClassName]);
+  end;
+end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                              TConditionVariableEx
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TConditionVariableEx - class implementation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TConditionVariableEx - public methods
+-------------------------------------------------------------------------------}
+
+constructor TConditionVariableEx.Create(SecurityAttributes: PSecurityAttributes; const Name: String);
+begin
+inherited Create(SecurityAttributes,Name);
+If fProcessShared then
+  CheckAndSetHandle(fDataLock,CreateMutexW(SecurityAttributes,RectBool(False),PWideChar(StrToWide(WSO_COND_PREFIX_DATALOCK + fName))))
+else
+  CheckAndSetHandle(fDataLock,CreateMutexW(SecurityAttributes,RectBool(False),nil));
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TConditionVariableEx.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
+begin
+inherited Open(DesiredAccess,InheritHandle,Name);
+CheckAndSetHandle(fDataLock,OpenMutexW(DesiredAccess or MUTEX_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(WSO_COND_PREFIX_DATALOCK + fName))));
+end;
+
+(*
+procedure TConditionVariableEx.Lock;
+begin
+end;
+
+procedure TConditionVariableEx.Unlock;
+begin
+end;
+*)
 
 {===============================================================================
 --------------------------------------------------------------------------------
