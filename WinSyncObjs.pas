@@ -102,7 +102,7 @@ type
   To properly use the TCriticalSection object, create one instance and then
   pass this one instance to other threads that need to be synchronized.
 
-  Make sure to only free it one.
+  Make sure to only free it once.
 
   You can also set the proterty FreeOnRelease to true (by default false) and
   then use the build-in reference counting - call method Acquire for each
@@ -168,7 +168,7 @@ type
 --------------------------------------------------------------------------------
 ===============================================================================}
 {
-  To properly use simple windows snychronization object (TEvent, TMutex,
+  To properly use simple windows synchronization object (TEvent, TMutex,
   TSemaphore, TWaitableTimer), create one progenitor instance and use this one
   instance only in a thread where it was created. Note that it IS possible and
   permissible to use the same instance in multiple threads, but this practice
@@ -183,7 +183,7 @@ type
   To access the synchronizer in different process, it is recommended to use
   Open constructors (requires named object).
   DuplicateFromProcess constructors or DuplicateForProcess methods along with
-  CreateFrom constructor can also be used, but thid requires some kind of IPC
+  CreateFrom constructor can also be used, but this requires some kind of IPC
   to transfer the handles between processes.
 }
 type
@@ -205,7 +205,7 @@ type
     constructor DuplicateFrom(SourceObject: TSimpleWinSyncObject); overload;
   {
     When passing handle from 32bit process to 64bit process, it is safe to
-    zero- or sign-extend it. In the opposite direction, it is safe to truncate
+    zero or sign-extend it. In the opposite direction, it is safe to truncate
     it.
   }
     constructor DuplicateFromProcess(SourceProcess: THandle; SourceHandle: THandle);
@@ -229,7 +229,7 @@ type
 --------------------------------------------------------------------------------
 ===============================================================================}
 const
-  // constants fo DesiredAccess parameter of Open constructor
+  // constants for DesiredAccess parameter of Open constructor
   EVENT_MODIFY_STATE = 2;
   EVENT_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or 3;
 
@@ -240,7 +240,8 @@ type
   TEvent = class(TSimpleWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset, InitialState: Boolean; const Name: String); overload;
-    constructor Create(const Name: String); overload;
+    constructor Create(ManualReset, InitialState: Boolean; const Name: String); overload;
+    constructor Create(const Name: String); overload; // ManualReset := True, InitialState := False
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
@@ -273,7 +274,8 @@ type
   TMutex = class(TSimpleWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialOwner: Boolean; const Name: String); overload;
-    constructor Create(const Name: String); overload;
+    constructor Create(InitialOwner: Boolean; const Name: String); overload;
+    constructor Create(const Name: String); overload; // InitialOwner := False
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
@@ -298,7 +300,8 @@ type
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialCount, MaximumCount: Integer; const Name: String); overload;
     constructor Create(InitialCount, MaximumCount: Integer; const Name: String); overload;
-    constructor Create(InitialCount, MaximumCount: Integer); overload;
+    constructor Create(const Name: String); overload; // InitialCount := 1, MaximumCount := 1
+    constructor Create; overload;
     constructor Open(DesiredAccess: LongWord; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String); overload;
     Function WaitForAndRelease(TimeOut: LongWord = INFINITE; Alertable: Boolean = False): TWaitResult;
@@ -326,7 +329,8 @@ type
   TWaitableTimer = class(TSimpleWinSyncObject)
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String); overload;
-    constructor Create(const Name: String); overload;
+    constructor Create(ManualReset: Boolean; const Name: String); overload;
+    constructor Create(const Name: String); overload; // ManualReset := True
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
@@ -920,6 +924,13 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+constructor TEvent.Create(ManualReset, InitialState: Boolean; const Name: String);
+begin
+Create(nil,ManualReset,InitialState,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 constructor TEvent.Create(const Name: String);
 begin
 Create(nil,True,False,Name);
@@ -1012,6 +1023,13 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+constructor TMutex.Create(InitialOwner: Boolean; const Name: String);
+begin
+Create(nil,InitialOwner,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 constructor TMutex.Create(const Name: String);
 begin
 Create(nil,False,Name);
@@ -1091,9 +1109,16 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-constructor TSemaphore.Create(InitialCount, MaximumCount: Integer);
+constructor TSemaphore.Create(const Name: String);
 begin
-Create(nil,InitialCount,MaximumCount,'');
+Create(nil,1,1,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TSemaphore.Create;
+begin
+Create(nil,1,1,'');
 end;
 
 //------------------------------------------------------------------------------
@@ -1161,6 +1186,13 @@ If RectifyAndSetName(Name) then
   CheckAndSetHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,PWideChar(StrToWide(fName))))
 else
   CheckAndSetHandle(CreateWaitableTimerW(SecurityAttributes,ManualReset,nil));
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TWaitableTimer.Create(ManualReset: Boolean; const Name: String);
+begin
+Create(nil,ManualReset,Name);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
