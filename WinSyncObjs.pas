@@ -88,10 +88,9 @@ type
   EWSOOpenError              = class(EWSOException);
   EWSOTimeConversionError    = class(EWSOException);
   EWSOWaitError              = class(EWSOException);
-
-  EWSOMultiWaitInvalidCount  = class(EWSOException);
   EWSOUnsupportedObject      = class(EWSOException);
   EWSOAutorunError           = class(EWSOException);
+  EWSOMultiWaitInvalidCount  = class(EWSOException);
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -462,6 +461,14 @@ type
     constructor DuplicateFrom(SourceObject: TComplexWinSyncObject); override;
     destructor Destroy; override;
   {
+    DataLock parameter can only be an event, mutex of semaphore, no other types
+    of synchronizers are supported.
+  }
+    procedure Sleep(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
+    procedure Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
+    procedure Wake; virtual;
+    procedure WakeAll; virtual;
+  {
     First overload of Sleep method only supports mutex object as Synchronizer
     parameter - it is because the object must be signaled and different objects
     have different functions for that, and there is no way of discerning which
@@ -472,10 +479,6 @@ type
     Second methods allows for event, mutex and semaphore object to be used
     as synchronizer.
   }
-    //procedure Sleep(Synchronizer: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
-    //procedure Sleep(Synchronizer: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
-    //procedure Wake; virtual;
-    //procedure WakeAll; virtual;
   {
     Allowed types of synchronizers are the same as in corresponding Sleep
     methods.
@@ -483,7 +486,7 @@ type
     //procedure AutoRun(Synchronizer: THandle); overload; virtual;
     //procedure AutoRun(Synchronizer: TSimpleWinSyncObject); overload; virtual;
   end;
-(*
+
 {===============================================================================
 --------------------------------------------------------------------------------
                               TConditionVariableEx
@@ -497,21 +500,16 @@ type
   protected
     fDataLock:  THandle;  // mutex
   public
-  {
-    Parameters SecurityAttributes and DesiredAccess are used for both
-    synchronizers (mutex and semaphore).
-
-    Note that DesiredAccess is always automatically combined with
-    MUTEX_MODIFY_STATE or SEMAPHORE_MODIFY_STATE.
-  }
     constructor Create(SecurityAttributes: PSecurityAttributes; const Name: String); override;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); override;
-    //procedure Lock; virtual;
-    //procedure Unlock; virtual;
-    //procedure Sleep(Timeout: DWORD = INFINITE); overload; virtual;
-    //procedure AutoRun; overload; virtual;    
+    constructor DuplicateFrom(SourceObject: TComplexWinSyncObject); override;
+    destructor Destroy; override;
+    procedure Lock; virtual;
+    procedure Unlock; virtual;
+    procedure Sleep(Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
+    //procedure AutoRun; overload; virtual;
   end;
-*)
+
 {===============================================================================
 --------------------------------------------------------------------------------
                                Utility functions
@@ -1360,7 +1358,7 @@ begin
 If fProcessShared then
   begin
     CheckAndSetHandle(fSharedDataLock.ProcessSharedLock,
-      CreateMutexW(SecurityAttributes,False,PWideChar(StrToWide(fName + GetSharedDataLockSuffix))));
+      CreateMutexW(SecurityAttributes,RectBool(False),PWideChar(StrToWide(fName + GetSharedDataLockSuffix))));
   end
 else
   begin
@@ -1664,82 +1662,121 @@ inherited;
 end;
 
 //------------------------------------------------------------------------------
-(*
-procedure TConditionVariable.Sleep(Synchronizer: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
 
-  Function InternalWait(FirstWait: Boolean): Boolean;
+procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+
+  Function InternalWait(IsFirstWait: Boolean): Boolean;
+  var
+    WaitResult: DWORD;
   begin
-    If FirstWait then
-      Result := SignalObjectAndWait(Synchronizer,fWaitLock,Timeout,Alertable) = WAIT_OBJECT_0
+    If IsFirstWait then
+      WaitResult := SignalObjectAndWait(DataLock,fWaitLock,Timeout,Alertable)
     else
-      Result := WaitForSingleObjectEx(fWaitLock,Timeout,Alertable) = WAIT_OBJECT_0
+      WaitResult := WaitForSingleObjectEx(fWaitLock,Timeout,Alertable);
+    // note that we are waiting on semaphore, so abandoned is not a good result  
+    Result := WaitResult = WAIT_OBJECT_0{signaled};
+    If WaitResult = WAIT_FAILED then
+      raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep.InternalWait: Sleep failed (0x%.8x)',[GetLastError]);
   end;
 
 var
-  WakeCycleOnEnter: UInt32;
-  WakeCycleCurrent: UInt32;
-  FirstWait:        Boolean;
-  ExitWait:         Boolean;
+  FirstWait:  Boolean;
+  ExitWait:   Boolean;
 begin
+LockSharedData;
+try
+  Inc(fCondSharedData^.WaitCount);
+finally
+  UnlockSharedData;
+end;
 FirstWait := True;
 ExitWait := False;
-// add this waiting to a waiter counter
-InterlockedIncrement(fCondDataPtr^.WaiterCount);
-try
-  repeat
-  {
-    If here for the first time, signal/unlock the synchronizer and enter
-    waiting on the wait lock (semaphore).
-    If this is not the first time, the synchronizer is already unlocked so
-    only enter waiting on wait lock.
-  }
-    If InternalWait(FirstWait) then
-      begin
-      {
-        Wait lock became signaled - the semafore had value of 1 or greater
-        (past tense because the waiting decremented it, so it is now less,
-        possibly 0).
-      }
-        ExitWait := True
-      end
-    else ExitWait := True;  // timeout, IO, error (spurious wakeup)
-    FirstWait := False;
-  until ExitWait;
-finally
-  // remove this waiting from a waiter counter.
-  InterlockedDecrement(fCondDataPtr^.WaiterCount);
-end;
-// lock the synchronizer
-If not WaitForSingleObject(Synchronizer,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED] then
-  raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep: Failed to lock synchronizer (0x%.8x)',[GetLastError]);
+repeat
+  If InternalWait(FirstWait) then
+    begin
+      LockSharedData;
+      try
+        If fCondSharedData^.WakeCount > 0 then
+          begin
+            Dec(fCondSharedData^.WakeCount);
+            If (fCondSharedData^.WakeCount <= 0) and fCondSharedData^.Broadcasting then
+              begin
+                fCondSharedData^.WakeCount := 0; 
+                fCondSharedData^.Broadcasting := False;
+                SetEvent(fBroadcastDoneLock);
+              end;
+            ExitWait := True; // normal wakeup               
+          end;
+        // if the WakeCount was 0, then re-enter waiting   
+      finally
+        UnlockSharedData;
+      end;
+    end
+  else ExitWait := True;  // timeout or spurious wakeup (eg. APC)
+  FirstWait := False;     // in case the cycle repeats and re-enters waiting (so the DataLock is not signaled again)
+until ExitWait;
+// lock the DataLock synchronizer
+If not WaitForSingleObject(DataLock,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED] then
+  raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep: Failed to lock data synchronizer (0x%.8x)',[GetLastError]);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-procedure TConditionVariable.Sleep(Synchronizer: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+procedure TConditionVariable.Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
 begin
-If (Synchronizer is TEvent) or (Synchronizer is TMutex) or (Synchronizer is TSemaphore) then
-  Sleep(Synchronizer.Handle,Timeout,Alertable)
+If (DataLock is TEvent) or (DataLock is TMutex) or (DataLock is TSemaphore) then
+  Sleep(DataLock.Handle,Timeout,Alertable)
 else
-  raise EWSOUnsupportedObject.CreateFmt('TConditionVariable.Sleep: Synchronizer is of unsupported object (%s),',[Synchronizer.ClassName]);
+  raise EWSOUnsupportedObject.CreateFmt('TConditionVariable.Sleep: Unsupported data synchronizer object type (%s),',[DataLock.ClassName]);
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TConditionVariable.Wake;
+var
+  Waiters:  UInt32;
 begin
-//InterlockedIncrement32(fWakeCyclePtr);
-//If InterlockedLoad32(fWaiterCountPtr) >= 1 then
-//  ReleaseSemaphore(fWaitLock,0,nil);
+LockSharedData;
+try
+  Waiters := fCondSharedData^.WaitCount;
+  If Waiters > 0 then
+    begin
+      Dec(fCondSharedData^.WaitCount);
+      Inc(fCondSharedData^.WakeCount);
+    end;
+finally
+  UnlockSharedData;
+end;
+If Waiters > 0 then
+  ReleaseSemaphore(fWaitLock,1,nil);
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TConditionVariable.WakeAll;
+var
+  Waiters:  UInt32;
 begin
-{$message 'implement'}
+LockSharedData;
+try
+  Waiters := fCondSharedData^.WaitCount;
+  If Waiters > 0 then
+    begin
+      Dec(fCondSharedData^.WaitCount,Waiters);
+      Inc(fCondSharedData^.WakeCount,Waiters);
+      fCondSharedData^.Broadcasting := True;
+    end;
+finally
+  UnlockSharedData;
+end;  
+If Waiters > 0 then
+  begin
+    ReleaseSemaphore(fWaitLock,Waiters,nil);
+    If WaitForSingleObject(fBroadcastDoneLock,INFINITE) <> WAIT_OBJECT_0 then
+      raise EWSOWaitError.CreateFmt('TConditionVariable.WakeAll: Wait for broadcast failed (0x%.8x)',[GetLastError]);
+  end;
 end;
-
+(*
 //------------------------------------------------------------------------------
 
 procedure TConditionVariable.AutoRun(Synchronizer: THandle);
@@ -1810,7 +1847,8 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
     else raise EWSOUnsupportedObject.CreateFmt('TConditionVariable.AutoRun: Synchronizer is of unsupported class (%s),',[Synchronizer.ClassName]);
   end;
 end;
-(*
+*)
+
 {===============================================================================
 --------------------------------------------------------------------------------
                               TConditionVariableEx
@@ -1827,7 +1865,7 @@ constructor TConditionVariableEx.Create(SecurityAttributes: PSecurityAttributes;
 begin
 inherited Create(SecurityAttributes,Name);
 If fProcessShared then
-  CheckAndSetHandle(fDataLock,CreateMutexW(SecurityAttributes,RectBool(False),PWideChar(StrToWide(WSO_COND_PREFIX_DATALOCK + fName))))
+  CheckAndSetHandle(fDataLock,CreateMutexW(SecurityAttributes,RectBool(False),PWideChar(StrToWide(fName + WSO_COND_SUFFIX_DATALOCK))))
 else
   CheckAndSetHandle(fDataLock,CreateMutexW(SecurityAttributes,RectBool(False),nil));
 end;
@@ -1837,18 +1875,56 @@ end;
 constructor TConditionVariableEx.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
 begin
 inherited Open(DesiredAccess,InheritHandle,Name);
-CheckAndSetHandle(fDataLock,OpenMutexW(DesiredAccess or MUTEX_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(WSO_COND_PREFIX_DATALOCK + fName))));
+CheckAndSetHandle(fDataLock,OpenMutexW(DesiredAccess or MUTEX_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_COND_SUFFIX_DATALOCK))));
 end;
 
-(*
+//------------------------------------------------------------------------------
+
+constructor TConditionVariableEx.DuplicateFrom(SourceObject: TComplexWinSyncObject);
+begin
+If SourceObject is Self.ClassType then
+  begin
+    If not SourceObject.ProcessShared then
+      begin
+        inherited DuplicateFrom(SourceObject);
+        DuplicateAndSetHandle(fDataLock,TConditionVariableEx(SourceObject).fDataLock);
+      end
+    else Open(SourceObject.Name);
+  end
+else EWSOInvalidObject.Create('TConditionVariableEx.DuplicateFrom: Incompatible source object.');
+end;
+
+//------------------------------------------------------------------------------
+
+destructor TConditionVariableEx.Destroy;
+begin
+CloseHandle(fDataLock);
+inherited;
+end;
+
+//------------------------------------------------------------------------------
+
 procedure TConditionVariableEx.Lock;
 begin
+If not WaitForSingleObject(fDataLock,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED] then
+  raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to lock data synchronizer (0x%.8x)',[GetLastError]);
 end;
+
+//------------------------------------------------------------------------------
 
 procedure TConditionVariableEx.Unlock;
 begin
+If not ReleaseMutex(fDataLock) then
+  raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to unlock data synchronizer (0x%.8x)',[GetLastError]);
 end;
-*)
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariableEx.Sleep( Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+begin
+Sleep(fDataLock,Timeout,Alertable);
+end;
+
 
 {===============================================================================
 --------------------------------------------------------------------------------
