@@ -76,19 +76,10 @@ uses
   Windows, SysUtils,
   AuxTypes, AuxClasses, NamedSharedItems;
 
-const
-  SEMAPHORE_MODIFY_STATE = $00000002;
-  SEMAPHORE_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or $3;
-
-  TIMER_MODIFY_STATE = $00000002;
-  TIMER_QUERY_STATE  = $00000001;
-  TIMER_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or
-                       TIMER_QUERY_STATE or TIMER_MODIFY_STATE;
-
+{===============================================================================
+    Library-specific exceptions
+===============================================================================}
 type
-  TWaitResult = (wrSignaled, wrAbandoned, wrIOCompletion, wrMessage, wrTimeout, wrError);
-
-  // library-specific exceptions
   EWSOException = class(Exception);
 
   EWSOInvalidHandle          = class(EWSOException);
@@ -195,6 +186,9 @@ type
   CreateFrom constructor can also be used, but thid requires some kind of IPC
   to transfer the handles between processes.
 }
+type
+  TWaitResult = (wrSignaled, wrAbandoned, wrIOCompletion, wrMessage, wrTimeout, wrError);
+
 {===============================================================================
     TSimpleWinSyncObject - class declaration
 ===============================================================================}
@@ -234,6 +228,11 @@ type
                                      TEvent
 --------------------------------------------------------------------------------
 ===============================================================================}
+const
+  // constants fo DesiredAccess parameter of Open constructor
+  EVENT_MODIFY_STATE = 2;
+  EVENT_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or 3;
+
 {===============================================================================
     TEvent - class declaration
 ===============================================================================}
@@ -260,6 +259,13 @@ type
                                      TMutex
 --------------------------------------------------------------------------------
 ===============================================================================}
+const
+  MUTANT_QUERY_STATE = 1;
+  MUTANT_ALL_ACCESS  = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or MUTANT_QUERY_STATE;
+
+  MUTEX_MODIFY_STATE = MUTANT_QUERY_STATE;
+  MUTEX_ALL_ACCESS   = MUTANT_ALL_ACCESS;
+
 {===============================================================================
     TMutex - class declaration
 ===============================================================================}
@@ -280,6 +286,10 @@ type
                                    TSemaphore
 --------------------------------------------------------------------------------
 ===============================================================================}
+const
+  SEMAPHORE_MODIFY_STATE = 2;
+  SEMAPHORE_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or 3;
+  
 {===============================================================================
     TSemaphore - class declaration
 ===============================================================================}
@@ -301,6 +311,11 @@ type
                                    TWaitableTimer
 --------------------------------------------------------------------------------
 ===============================================================================}
+const
+  TIMER_QUERY_STATE  = 1;
+  TIMER_MODIFY_STATE = 2;
+  TIMER_ALL_ACCESS   = STANDARD_RIGHTS_REQUIRED or SYNCHRONIZE or TIMER_QUERY_STATE or TIMER_MODIFY_STATE;
+
 {===============================================================================
     TWaitableTimer - class declaration
 ===============================================================================}
