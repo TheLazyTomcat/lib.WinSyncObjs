@@ -91,6 +91,7 @@ type
   EWSOWaitError              = class(EWSOException);
   EWSOUnsupportedObject      = class(EWSOException);
   EWSOAutoCycleError         = class(EWSOException);
+  EWSOInvalidValue           = class(EWSOException);
   EWSOMultiWaitInvalidCount  = class(EWSOException);
 
 {===============================================================================
@@ -376,6 +377,7 @@ type
     Function GetSharedUserDataPtr: PWSOSharedUserData; virtual;
     Function GetSharedUserData: TWSOSharedUserData; virtual;
     procedure SetSharedUserData(Value: TWSOSharedUserData); virtual;
+    Function RectifyAndSetName(const Name: String): Boolean; override;
     procedure CheckAndSetHandle(out Destination: THandle; Handle: THandle); virtual;
     procedure DuplicateAndSetHandle(out Destination: THandle; Handle: THandle); virtual;
     // shared data lock management methods
@@ -395,9 +397,9 @@ type
     procedure DestroyLocks; virtual; abstract;
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; const Name: String); overload; virtual;
-    constructor Create(const Name: String); overload;
+    constructor Create(const Name: String); overload; virtual;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload; virtual;
-    constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
+    constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
   {
     Use DuplicateFrom to create instance that accesses the same synchronization
     primitive(s) and shared data as the source object.
@@ -455,7 +457,6 @@ type
     fOnPredicateCheckCallback:  TWSOPredicateCheckCallback;
     fOnDataAccessEvent:         TWSODataAccessEvent;
     fOnDataAccessCallback:      TWSODataAccessCallback;
-    Function RectifyAndSetName(const Name: String): Boolean; override;
     class Function GetSharedDataLockSuffix: String; override;
     // shared data management methods
     procedure AllocateSharedData; override;
@@ -529,14 +530,26 @@ type
                                     TBarrier
 --------------------------------------------------------------------------------
 ===============================================================================}
+type
+  TWSOBarrierSharedData = packed record
+    SharedUserData: TWSOSharedUserData;
+    RefCount:       Int32;
+    MaxWaitCount:   UInt32; // invariant value, set only once
+    WaitCount:      UInt32;
+    Releasing:      Boolean;
+  end;
+  PWSOBarrierSharedData = ^TWSOBarrierSharedData;
+
 {===============================================================================
     TBarrier - class declaration
 ===============================================================================}
-(*
 type
   TBarrier = class(TComplexWinSyncObject)
   protected
-    Function RectifyAndSetName(const Name: String): Boolean; override;
+    fReleaseLock:       THandle;                // manual-reset event
+    fWaitLock:          THandle;                // manual-reset event
+    fBarrierSharedData: PWSOBarrierSharedData;
+    Function GetCount: Integer; virtual;
     class Function GetSharedDataLockSuffix: String; override;
     // shared data management methods
     procedure AllocateSharedData; override;
@@ -547,12 +560,15 @@ type
     procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
     procedure DestroyLocks; override;
   public
-    constructor Create(SecurityAttributes: PSecurityAttributes; Count: UInt32; const Name: String); overload; virtual;
-    constructor Create(Count: UInt32; const Name: String); overload;
+    constructor Create(SecurityAttributes: PSecurityAttributes; const Name: String); override;
+    constructor Create(const Name: String); override;
+    constructor Create(SecurityAttributes: PSecurityAttributes; Count: Integer; const Name: String); overload;
+    constructor Create(Count: Integer; const Name: String); overload;
     Function Wait: Boolean; virtual;
-    procedure Release; virtual;
+    Function Release: Integer; virtual;
+    property Count: Integer read GetCount;
   end;
-*)
+
 {===============================================================================
 --------------------------------------------------------------------------------
                                Utility functions
@@ -1302,10 +1318,10 @@ Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; Co
       begin
         If not LocalFileTimeToFileTime(LocalTime,Result) then
           raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.SetWaitableTimer.DateTimeToFileTime: ' +
-                                                  'LocalFileTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
+                                                  'LocalFileTimeToFileTime failed (0x%.8x).',[GetLastError]);
       end
     else raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.SetWaitableTimer.DateTimeToFileTime: ' +
-                                                 'SystemTimeToFileTime failed with error 0x%.8x.',[GetLastError]);
+                                                 'SystemTimeToFileTime failed (0x%.8x).',[GetLastError]);
   end;
 
 begin
@@ -1339,7 +1355,13 @@ end;
 ===============================================================================}
 const
   WSO_CPLX_SHARED_NAMESPACE = 'wso_shared';
-  WSO_CPLX_SHARED_ITEMSIZE  = SizeOf(TWSOCondSharedData);{$message 'use common size for all complex objects'}
+{$IF SizeOf(TWSOCondSharedData) > SizeOf(TWSOBarrierSharedData)}
+  WSO_CPLX_SHARED_ITEMSIZE  = SizeOf(TWSOCondSharedData);
+{$ELSE}
+  WSO_CPLX_SHARED_ITEMSIZE  = SizeOf(TWSOBarrierSharedData);   
+{$IFEND}
+
+  WSO_CPLX_SUFFIX_LENGTH = 8; // all suffixes must have the same length
 
 // because there are incorrect declarations...
 Function SignalObjectAndWait(hObjectToSignal: THandle; hObjectToWaitOn: THandle; dwMilliseconds: DWORD; bAlertable: BOOL): DWORD; stdcall; external kernel32;
@@ -1368,6 +1390,17 @@ end;
 procedure TComplexWinSyncObject.SetSharedUserData(Value: TWSOSharedUserData);
 begin
 Move(Value,GetSharedUserDataPtr^,SizeOf(TWSOSharedUserData));
+end;
+
+//------------------------------------------------------------------------------
+
+Function TComplexWinSyncObject.RectifyAndSetName(const Name: String): Boolean;
+begin
+inherited RectifyAndSetName(Name);  // should be always true
+If (Length(fName) + WSO_CPLX_SUFFIX_LENGTH) > UNICODE_STRING_MAX_CHARS then
+  SetLength(fName,UNICODE_STRING_MAX_CHARS - WSO_CPLX_SUFFIX_LENGTH);
+Result := Length(fName) > 0;
+fProcessShared := Result;
 end;
 
 //------------------------------------------------------------------------------
@@ -1448,7 +1481,7 @@ begin
 If fProcessShared then
   begin
     If not ReleaseMutex(fSharedDataLock.ProcessSharedLock) then
-      raise EWSOWaitError.Create('TComplexWinSyncObject.UnlockSharedData: Lock not released, cannot proceed.');
+      raise EWSOWaitError.CreateFmt('TComplexWinSyncObject.UnlockSharedData: Lock not released, cannot proceed (0x%.8x).',[GetLastError]);
   end
 else fSharedDataLock.ThreadSharedLock.Leave;
 end;
@@ -1465,7 +1498,7 @@ If fProcessShared then
 else
   begin
     fSharedData := AllocMem(WSO_CPLX_SHARED_ITEMSIZE);
-    PWSOCommonSharedData(fSharedData)^.RefCount := 1;
+    InterlockedStore(PWSOCommonSharedData(fSharedData)^.RefCount,1);
   end;
 end;
 
@@ -1592,25 +1625,12 @@ const
   WSO_COND_SUFFIX_BDONELOCK = '@cnd_blk';
   WSO_COND_SUFFIX_DATALOCK  = '@cnd_dlk';
 
-  WSO_COND_SUFFIX_LENGTH = 8; // all prefixes must have the same length
-
 {===============================================================================
     TConditionVariable - class implementation
 ===============================================================================}
 {-------------------------------------------------------------------------------
     TConditionVariable - protected methods
 -------------------------------------------------------------------------------}
-
-Function TConditionVariable.RectifyAndSetName(const Name: String): Boolean;
-begin
-inherited RectifyAndSetName(Name);  // should be always true
-If (Length(fName) + WSO_COND_SUFFIX_LENGTH) > UNICODE_STRING_MAX_CHARS then
-  SetLength(fName,UNICODE_STRING_MAX_CHARS - WSO_COND_SUFFIX_LENGTH);
-Result := Length(fName) > 0;
-fProcessShared := Result;
-end;
-
-//------------------------------------------------------------------------------
 
 class Function TConditionVariable.GetSharedDataLockSuffix: String;
 begin
@@ -1779,7 +1799,7 @@ repeat
 until ExitWait;
 // lock the DataLock synchronizer
 If not WaitForSingleObject(DataLock,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED] then
-  raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep: Failed to lock data synchronizer (0x%.8x)',[GetLastError]);
+  raise EWSOWaitError.Create('TConditionVariable.Sleep: Failed to lock data synchronizer.');
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1835,7 +1855,7 @@ If Waiters > 0 then
   begin
     ReleaseSemaphore(fWaitLock,Waiters,nil);
     If WaitForSingleObject(fBroadcastDoneLock,INFINITE) <> WAIT_OBJECT_0 then
-      raise EWSOWaitError.CreateFmt('TConditionVariable.WakeAll: Wait for broadcast failed (0x%.8x)',[GetLastError]);
+      raise EWSOWaitError.Create('TConditionVariable.WakeAll: Wait for broadcast failed.');
   end;
 end;
 
@@ -1865,7 +1885,7 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckEvent) then
         If not(woWakeBeforeUnlock in WakeOptions) then
           SelectWake(WakeOptions);
       end
-    else raise EWSOAutoCycleError.CreateFmt('TConditionVariable.AutoCycle: Failed to lock data synchronizer (0x%.8x).',[GetLastError]);
+    else raise EWSOAutoCycleError.Create('TConditionVariable.AutoCycle: Failed to lock data synchronizer.');
   end;
 end;
 
@@ -1905,8 +1925,7 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
             If not(woWakeBeforeUnlock in WakeOptions) then
               SelectWake(WakeOptions);
           end
-        else raise EWSOAutoCycleError.CreateFmt('TConditionVariable.AutoCycle: ' +
-                                                'Failed to lock data synchronizer (0x%.8x).',[DataLock.LastError]);
+        else raise EWSOAutoCycleError.Create('TConditionVariable.AutoCycle: Failed to lock data synchronizer.');
       end
     else raise EWSOUnsupportedObject.CreateFmt('TConditionVariable.AutoCycle: ' +
                                                'Unsupported data synchronizer object type (%s),',[DataLock.ClassName]);
@@ -1967,7 +1986,7 @@ end;
 procedure TConditionVariableEx.Lock;
 begin
 If not WaitForSingleObject(fDataLock,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED] then
-  raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to lock data synchronizer (0x%.8x)',[GetLastError]);
+  raise EWSOWaitError.Create('TConditionVariableEx.Lock: Failed to lock data synchronizer.');
 end;
 
 //------------------------------------------------------------------------------
@@ -1975,7 +1994,7 @@ end;
 procedure TConditionVariableEx.Unlock;
 begin
 If not ReleaseMutex(fDataLock) then
-  raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to unlock data synchronizer (0x%.8x)',[GetLastError]);
+  raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to unlock data synchronizer (0x%.8x).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1990,6 +2009,250 @@ end;
 procedure TConditionVariableEx.AutoCycle;
 begin
 AutoCycle(fDataLock);
+end;
+
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                                    TBarrier
+--------------------------------------------------------------------------------
+===============================================================================}
+const
+  WSO_BARR_SUFFIX_BARRLOCK  = '@brr_blk';
+  WSO_BARR_SUFFIX_RELLOCK   = '@brr_rlk';
+  WSO_BARR_SUFFIX_WAITLOCK  = '@brr_wlk';
+
+{===============================================================================
+    TBarrier - class implementation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TBarrier - protected methods
+-------------------------------------------------------------------------------}
+
+Function TBarrier.GetCount: Integer;
+begin
+Result := fBarrierSharedData^.MaxWaitCount;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TBarrier.GetSharedDataLockSuffix: String;
+begin
+Result := WSO_BARR_SUFFIX_BARRLOCK;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBarrier.AllocateSharedData;
+begin
+inherited;
+fBarrierSharedData := PWSOBarrierSharedData(fSharedData);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBarrier.FreeSharedData;
+begin
+fBarrierSharedData := nil;
+inherited;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBarrier.CreateLocks(SecurityAttributes: PSecurityAttributes);
+begin
+If fProcessShared then
+  begin
+    CheckAndSetHandle(fReleaseLock,
+      CreateEventW(SecurityAttributes,True,False,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_RELLOCK))));
+    CheckAndSetHandle(fWaitLock,
+      CreateEventW(SecurityAttributes,True,False,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_WAITLOCK))));
+  end
+else
+  begin
+    CheckAndSetHandle(fReleaseLock,CreateEventW(SecurityAttributes,True,False,nil));
+    CheckAndSetHandle(fWaitLock,CreateEventW(SecurityAttributes,True,False,nil));
+  end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBarrier.OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean);
+begin
+CheckAndSetHandle(fReleaseLock,
+  OpenEventW(DesiredAccess or EVENT_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_RELLOCK))));
+CheckAndSetHandle(fWaitLock,
+  OpenEventW(DesiredAccess or EVENT_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_WAITLOCK))));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBarrier.DuplicateLocks(SourceObject: TComplexWinSyncObject);
+begin
+fBarrierSharedData := PWSOBarrierSharedData(fSharedData);
+DuplicateAndSetHandle(fReleaseLock,TBarrier(SourceObject).fReleaseLock);
+DuplicateAndSetHandle(fWaitLock,TBarrier(SourceObject).fWaitLock);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBarrier.DestroyLocks;
+begin
+CloseHandle(fWaitLock);
+CloseHandle(fReleaseLock);
+end;
+
+{-------------------------------------------------------------------------------
+    TBarrier - public methods
+-------------------------------------------------------------------------------}
+
+constructor TBarrier.Create(SecurityAttributes: PSecurityAttributes; const Name: String);
+begin
+{
+  Barrier with count of 1 is seriously pointless, but if you call a constructor
+  without specifying the count, what do you expect to happen?!
+}
+Create(SecurityAttributes,1,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TBarrier.Create(const Name: String);
+begin
+Create(nil,1,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TBarrier.Create(SecurityAttributes: PSecurityAttributes; Count: Integer; const Name: String);
+begin
+inherited Create(SecurityAttributes,Name);
+If Count > 0 then
+  begin
+    If fBarrierSharedData^.MaxWaitCount = 0 then
+      fBarrierSharedData^.MaxWaitCount := Count;
+  end
+else raise EWSOInvalidValue.CreateFmt('TBarrier.Create: Invalid count (%d)',[Count]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TBarrier.Create(Count: Integer; const Name: String);
+begin
+Create(nil,Count,Name);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TBarrier.Wait: Boolean;
+var
+  ExitWait: Boolean;
+begin
+Result := False;
+repeat
+  LockSharedData;
+  If fBarrierSharedData^.Releasing then
+    begin
+    {
+      Releasing is in progress, so this thread cannot queue on the barrier.
+      Unlock shared data and wait for fReleaseLock to become signaled, which
+      happens at the end of releasing.
+    }
+      UnlockSharedData;
+      If WaitForSingleObject(fReleaseLock,INFINITE) <> WAIT_OBJECT_0 then
+        raise EWSOWaitError.Create('TBarrier.Wait: Failed waiting on release lock.');
+      ExitWait := False;
+      // Releasing should be done by this point. Re-enter waiting.
+    end
+  else
+    begin
+      // Releasing is currently not running.
+      Inc(fBarrierSharedData^.WaitCount);
+      If fBarrierSharedData^.WaitCount >= fBarrierSharedData^.MaxWaitCount then
+        begin
+        {
+          Maximum number of waiting threads for this barrier has been reached.
+
+          First prevent other threads from queueing on this barrier by
+          resetting fReleaseLock and indicating the fact in shared data.
+        }
+          ResetEvent(fReleaseLock);
+          fBarrierSharedData^.Releasing := True;
+          Dec(fBarrierSharedData^.WaitCount); // remove self from waiting count
+        {
+          Now unlock shared data and release all waiting threads from
+          fWaitLock.
+
+          Unlocking shared data at this point is secure because any thread that
+          will acquire them will encounter Releasing field to be true and will
+          therefore enter waiting on fReleaseLock, which is now non-signaled.
+        }          
+          UnlockSharedData;
+          SetEvent(fWaitLock);
+          Result := True; // indicate we have released the barrier
+        end
+      else
+        begin
+        {
+          Maximum number of waiters not reached.
+
+          Just unlock the shared data and enter waiting on fWaitLock.
+        }
+          UnlockSharedData;
+          If WaitForSingleObject(fWaitLock,INFINITE) <> WAIT_OBJECT_0 then
+            raise EWSOWaitError.Create('TBarrier.Wait: Failed waiting on the barrier.');
+        {
+          The wait lock has been set to signaled, so the barrier is releasing.
+
+          Remove self from waiting threads count and, if we are last to be
+          released, stop releasing and signal end of releasing to threads
+          waiting on fReleaseLock and also mark it in shared data.
+        }
+          LockSharedData;
+          try
+            Dec(fBarrierSharedData^.WaitCount);
+            If fBarrierSharedData^.WaitCount <= 0 then
+              begin
+                fBarrierSharedData^.WaitCount := 0;
+                fBarrierSharedData^.Releasing := False;
+                ResetEvent(fWaitLock);
+                SetEvent(fReleaseLock);
+              end;
+          finally
+            UnlockSharedData;
+          end;
+        end;
+      ExitWait := True;
+    end;
+until ExitWait;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TBarrier.Release: Integer;
+var
+  SetWaitLock:  Boolean;
+begin
+SetWaitLock := False;
+LockSharedData;
+try
+  If not fBarrierSharedData^.Releasing then
+    begin
+      If fBarrierSharedData^.WaitCount > 0 then
+        begin
+          SetWaitLock := True;
+          Result := fBarrierSharedData^.WaitCount;
+          ResetEvent(fReleaseLock);
+          fBarrierSharedData^.Releasing := True;
+        end
+      else Result := 0;
+    end
+  else Result := -1;
+finally
+  UnlockSharedData;
+end;
+If SetWaitLock then
+  SetEvent(fWaitLock);
 end;
 
 
