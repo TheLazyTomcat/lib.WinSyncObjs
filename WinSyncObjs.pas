@@ -347,6 +347,50 @@ type
                               TComplexWinSyncObject
 --------------------------------------------------------------------------------
 ===============================================================================}
+{
+  Complex synchronization objects can be principally created in two ways - as
+  thread-shared or process-shared.
+
+  Thread-shared objects are created without a name, or, more precisely, with an
+  empty name, as there is no constructor without the name argument. They can be
+  used only for synchronization between threads within one process.
+
+  Process-shared objects are created with non-empty name and can be used for
+  synchronization between any threads within a system, including threads in
+  different processes.
+  Two instances with the same name, created in any process, will be using the
+  same synchronization object. Different types of synchronizers can have the
+  same name and still be considered separate, so there is no risk of naming
+  conflicts (each type of synchronizer has kind-of its own namespace).
+
+    WARNING - TConditionVariable and TConditionVariableEx are considered one
+              type of synchronizer, the latter being only an extension of the
+              former, so they occupy the same namespace. But it is NOT possible
+              to create an instace of TConditionVariableEx by opening (using
+              Open or DuplicateFrom constructor) instance of TConditionVariable.
+
+
+  To properly use complex windows synchronization object (TConditioVariable,
+  TConditioVariableEx, TBarrier, TReadWriteLock), create one progenitor
+  instance and use this instance only in the thread that created it.
+
+  To access the synchronizer in other threads of the same process, create a new
+  instance using DuplicateFrom constructor, passing the progenitor instance or
+  any duplicate instance based on it as an source. If the progenitor is
+  process-shared (ie. named), you can also open it using Create or Open
+  construtors, specifying the same name as has the progenitor.
+
+  To access the synchronizer in different process, the progenitor must be
+  created as process-shared, that is, it must have a non-empty name. Use Create
+  or Open constructors, specifying the same name as has the progenitor.
+  The newly created instances will be then using the same synchronization object
+  as the progenitor.
+
+    NOTE - DuplicateFrom constructor can be used on both thread-shared and
+           process-shared source object, the newly created instance will have
+           the same mode. For process-shared (named) objects, calling this
+           constructor is equivalent to caling Open constructor. 
+}
 type
   TWSOSharedUserData = packed array[0..31] of Byte;
   PWSOSharedUserData = ^TWSOSharedUserData;
@@ -423,6 +467,13 @@ type
                                TConditionVariable
 --------------------------------------------------------------------------------
 ===============================================================================}
+{
+  WARNING - be wery cautious about objects passed as DataLock parameter to
+            methods Sleep and AutoCycle. If they have been locked multiple
+            times before the call (affects mutex and semaphore), it can create
+            a deadlock as the lock is released only once within the method (so
+            it can effectively stay locked indefinitely).
+}
 type
   TWSOCondSharedData = packed record
     SharedUserData: TWSOSharedUserData;
@@ -507,6 +558,16 @@ type
                               TConditionVariableEx
 --------------------------------------------------------------------------------
 ===============================================================================}
+{
+  Only an extension of TConditionVariable with integrated data lock (use mthods
+  Lock and Unlock to manipulate it). New versions of methods Sleep and AutoCycle
+  without the DataLock parameter are using the integrated data lock for that
+  purpose.
+
+    WARNING - as in the case of TConditionVariable, be wary of how many times
+              you lock the integrated data lock. A mutex is used internally, so
+              mutliple locks can result in a deadlock in a sleep.
+}
 {===============================================================================
     TConditionVariableEx - class declaration
 ===============================================================================}
