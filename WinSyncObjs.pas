@@ -15,7 +15,7 @@
 
   Last change 2021-12-21
 
-  ©2016-2021 František Milt
+  ©2016-2022 František Milt
 
   Contacts:
     František Milt: frantisek.milt@gmail.com
@@ -32,9 +32,20 @@
       github.com/TheLazyTomcat/Lib.WinSyncObjs
 
   Dependencies:
-    AuxTypes    - github.com/TheLazyTomcat/Lib.AuxTypes
-    AuxClasses  - github.com/TheLazyTomcat/Lib.AuxClasses
-    StrRect     - github.com/TheLazyTomcat/Lib.StrRect
+    AuxTypes           - github.com/TheLazyTomcat/Lib.AuxTypes
+    AuxClasses         - github.com/TheLazyTomcat/Lib.AuxClasses
+    NamedSharedItems   - github.com/TheLazyTomcat/Lib.NamedSharedItems
+    StrRect            - github.com/TheLazyTomcat/Lib.StrRect
+    InterlockedOps     - github.com/TheLazyTomcat/Lib.InterlockedOps
+    BitOps             - github.com/TheLazyTomcat/Lib.BitOps    
+    HashBase           - github.com/TheLazyTomcat/Lib.HashBase
+    SHA1               - github.com/TheLazyTomcat/Lib.SHA1
+    StaticMemoryStream - github.com/TheLazyTomcat/Lib.StaticMemoryStream
+    SharedMemoryStream - github.com/TheLazyTomcat/Lib.SharedMemoryStream
+  * SimpleCPUID        - github.com/TheLazyTomcat/Lib.SimpleCPUID
+
+  Library SimpleCPUID might not be required, depending on defined symbols in
+  InterlockedOps and BitOps libraries.
 
 ===============================================================================}
 unit WinSyncObjs;
@@ -134,7 +145,7 @@ type
     not necessarily contain the correct value set for the underlying system
     object.
     Set this property only in one thread or use it only for reading the value
-    set in the constructor.
+    that was set in the constructor.
   }
     property SpinCount: DWORD read GetSpinCount write SetSpinCountProc;
   end;
@@ -156,8 +167,9 @@ type
   public
     constructor Create;
   {
-    LastError stores code of the last operating system error that has not
-    resulted in an exception being raised (eg. error during waiting).
+    LastError contains code of the last operating system error that has not
+    resulted in an exception being raised (eg. error during waiting, release
+    operations, ...).
   }
     property LastError: DWORD read fLastError;
     property Name: String read fName;
@@ -173,7 +185,8 @@ type
   TSemaphore, TWaitableTimer), create one progenitor instance and use this one
   instance only in a thread where it was created. Note that it IS possible and
   permissible to use the same instance in multiple threads, but this practice
-  is discouraged as none of the fields are protected against concurrent access.
+  is discouraged as none of the fields are protected against concurrent access
+  (especially problematic for LastError property).
 
   To access the synchronizer in other threads of the same process, create a new
   instance using DuplicateFrom constructor, passing the progenitor instance or
@@ -352,8 +365,8 @@ type
   thread-shared or process-shared.
 
   Thread-shared objects are created without a name, or, more precisely, with an
-  empty name, as there is no constructor without the name argument. They can be
-  used only for synchronization between threads within one process.
+  empty name. They can be used only for synchronization between threads within
+  one process.
 
   Process-shared objects are created with non-empty name and can be used for
   synchronization between any threads within a system, including threads in
@@ -376,20 +389,20 @@ type
 
   To access the synchronizer in other threads of the same process, create a new
   instance using DuplicateFrom constructor, passing the progenitor instance or
-  any duplicate instance based on it as an source. If the progenitor is
+  any duplicate instance based on it as a source. If the progenitor is
   process-shared (ie. named), you can also open it using Create or Open
   construtors, specifying the same name as has the progenitor.
 
   To access the synchronizer in different process, the progenitor must be
   created as process-shared, that is, it must have a non-empty name. Use Create
   or Open constructors, specifying the same name as has the progenitor.
-  The newly created instances will be then using the same synchronization object
+  The newly created instances will then be using the same synchronization object
   as the progenitor.
 
     NOTE - DuplicateFrom constructor can be used on both thread-shared and
            process-shared source object, the newly created instance will have
-           the same mode. For process-shared (named) objects, calling this
-           constructor is equivalent to caling Open constructor. 
+           the same mode as source. For process-shared (named) objects, calling
+           this constructor is equivalent to caling Open constructor.
 }
 type
   TWSOSharedUserData = packed array[0..31] of Byte;
@@ -442,6 +455,7 @@ type
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; const Name: String); overload; virtual;
     constructor Create(const Name: String); overload; virtual;
+    constructor Create; overload; virtual;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload; virtual;
     constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
   {
@@ -470,16 +484,16 @@ type
 {
   WARNING - be wery cautious about objects passed as DataLock parameter to
             methods Sleep and AutoCycle. If they have been locked multiple
-            times before the call (affects mutex and semaphore), it can create
-            a deadlock as the lock is released only once within the method (so
-            it can effectively stay locked indefinitely).
+            times before the call (affects mutexes and semaphores), it can
+            create a deadlock as the lock is released only once within the
+            method (so it can effectively stay locked indefinitely).
 }
 type
   TWSOCondSharedData = packed record
     SharedUserData: TWSOSharedUserData;
     RefCount:       Int32;
-    WaitCount:      UInt32;
-    WakeCount:      UInt32;
+    WaitCount:      Int32;
+    WakeCount:      Int32;
     Broadcasting:   Boolean;
   end;
   PWSOCondSharedData = ^TWSOCondSharedData;
@@ -559,14 +573,14 @@ type
 --------------------------------------------------------------------------------
 ===============================================================================}
 {
-  Only an extension of TConditionVariable with integrated data lock (use mthods
+  Only an extension of TConditionVariable with integrated data lock (use methods
   Lock and Unlock to manipulate it). New versions of methods Sleep and AutoCycle
   without the DataLock parameter are using the integrated data lock for that
   purpose.
 
     WARNING - as in the case of TConditionVariable, be wary of how many times
               you lock the integrated data lock. A mutex is used internally, so
-              mutliple locks can result in a deadlock in a sleep.
+              mutliple locks can result in a deadlock in sleep method.
 }
 {===============================================================================
     TConditionVariableEx - class declaration
@@ -595,8 +609,8 @@ type
   TWSOBarrierSharedData = packed record
     SharedUserData: TWSOSharedUserData;
     RefCount:       Int32;
-    MaxWaitCount:   UInt32; // invariant value, set only once
-    WaitCount:      UInt32;
+    MaxWaitCount:   Int32;  // invariant value, set only once
+    WaitCount:      Int32;
     Releasing:      Boolean;
   end;
   PWSOBarrierSharedData = ^TWSOBarrierSharedData;
@@ -623,23 +637,90 @@ type
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; const Name: String); override;
     constructor Create(const Name: String); override;
+    constructor Create; override;
     constructor Create(SecurityAttributes: PSecurityAttributes; Count: Integer; const Name: String); overload;
     constructor Create(Count: Integer; const Name: String); overload;
+    constructor Create(Count: Integer); overload;
     Function Wait: Boolean; virtual;
+  {
+    Releases all waiting threads, irrespective of their count, and sets the
+    barrier back to a non-signaled (blocking) state.  
+  }
     Function Release: Integer; virtual;
     property Count: Integer read GetCount;
   end;
 
 {===============================================================================
 --------------------------------------------------------------------------------
-                               Utility functions
+                                 TReadWriteLock
 --------------------------------------------------------------------------------
 ===============================================================================}
+{
+  This implementation of read-write lock allows for recursive locking, both for
+  readers and writers, but it does not support read lock promotion - that is,
+  you cannot acquire write lock in the same thread where you are holding a read
+  lock.
 
+    WARNING - trying to acquire write lock in a thread that is currently holding
+              a read lock (or vice-versa) will inevitably create a deadlock.
+}
 type
+  TWSORWLockSharedData = packed record
+    SharedUserData: TWSOSharedUserData;
+    RefCount:       Int32;
+
+  end;
+  PWSORWLockSharedData = ^TWSORWLockSharedData;
+
+{===============================================================================
+    TReadWriteLock - class declaration
+===============================================================================}
+type
+  TReadWriteLock = class(TComplexWinSyncObject)
+  protected
+  public
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                                 Wait functions
+--------------------------------------------------------------------------------
+===============================================================================}
+type
+{
+  Options for message waiting. See MsgWaitForMultipleObjects(Ex) documentation
+  for details of message waiting.
+
+  mwoEnable         - enable waiting on messages
+  mwoInputAvailable - adds MWMO_INPUTAVAILABLE to flags when message waiting
+                      is enabled.
+}
   TMessageWaitOption = (mwoEnable,mwoInputAvailable);
 
   TMessageWaitOptions = set of TMessageWaitOption;
+
+{
+  Currently defined values for WakeMask parameter.
+}
+const
+  QS_KEY            = $0001;
+  QS_MOUSEMOVE      = $0002;
+  QS_MOUSEBUTTON    = $0004;
+  QS_POSTMESSAGE    = $0008;
+  QS_TIMER          = $0010;
+  QS_PAINT          = $0020;
+  QS_SENDMESSAGE    = $0040;
+  QS_HOTKEY         = $0080;
+  QS_ALLPOSTMESSAGE = $0100;
+  QS_RAWINPUT       = $0400;
+  QS_TOUCH          = $0800;
+  QS_POINTER        = $1000;
+  QS_MOUSE          = QS_MOUSEMOVE or QS_MOUSEBUTTON;
+  QS_INPUT          = QS_MOUSE or QS_KEY or QS_RAWINPUT or QS_TOUCH or QS_POINTER;
+  QS_ALLEVENTS      = QS_INPUT or QS_POSTMESSAGE or QS_TIMER or QS_PAINT or QS_HOTKEY;
+  QS_ALLINPUT       = QS_INPUT or QS_POSTMESSAGE or QS_TIMER or QS_PAINT or QS_HOTKEY or QS_SENDMESSAGE;
+
+//------------------------------------------------------------------------------
 {
   Waits on multiple handles - the function does not return until wait criteria
   are met, an error occurs or the wait times-out (which of these occured is
@@ -657,14 +738,15 @@ type
     Thread
     Waitable timer
 
-  Handle array must not be empty and must be shorter or equal to 64, otherwise
-  an EWSOMultiWaitInvalidCount exception will be raised.
+  Handle array must not be empty and length (Count) must be less or equal to 64
+  (63 when message waiting is enabled), otherwise an exception of type
+  EWSOMultiWaitInvalidCount will be raised.
 
   If WaitAll is set to true, the function will return wrSignaled only when ALL
   objects are signaled. When set to false, it will return wrSignaled when at
   least one object becomes signaled.
 
-  Timeout is in milliseconds.
+  Timeout is in milliseconds. Default value for Timeout is INFINITE.
 
   When WaitAll is false, Index indicates which object was signaled or abandoned
   when wrSignaled or wrAbandoned is returned. In case of wrError, the Index
@@ -672,32 +754,65 @@ type
   undefined.
   When WaitAll is true, value of Index is undefined except for wrError, where
   it again contains system error number.
+
+  If Alertable is true, the function will also return if APC has been queued
+  to the waiting thread. Default value for Alertable is False.
+
+  Use set argument MsgWaitOptions to enable and configure message waiting.
+  Default value is an empty set, meaning message waiting is disabled.
+
+  Argument WakeMask is used without change when message waiting is enabled
+  (it prescribes which messages to observe), otherwise it is ignored. Use OR
+  to combine multiple values. Default value is zero.
 }
-(*
-Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult; overload;
-Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean): TWaitResult; overload;
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 
-Function WaitForMultipleHandlesLimited(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleHandlesLimited(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-
+//------------------------------------------------------------------------------
 {
-  Objects array must not be empty, otherwise an EWSOMultiWaitInvalidCount
-  exception is raised, but can otherwise contain an arbitrary number of
-  objects.
-
-  For other parameters, refer to description of WaitForMultipleHandles.
-
-  Default value for Timeout is INFINITE.
+  Following functions are behaving the same as the ones accepting pointer to
+  handle array, see there for details.
 }
-Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleObjects(Objects: array of TWinSyncObject; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-*)
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 
+//------------------------------------------------------------------------------
+{
+  Functions WaitForMultipleObjects are, again, behaving exactly the same as
+  WaitForMultipleHandles.
+
+    NOTE - LastError property of the passed objects is not set by these
+           functions. Possible error code is returned in Index output parameter.
+}
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+
+//------------------------------------------------------------------------------
+
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+
+//------------------------------------------------------------------------------
+
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                               Utility functions
+--------------------------------------------------------------------------------
+===============================================================================}
 {
   WaitResultToStr simply returns textual representation of a given wait result.
 
@@ -708,7 +823,7 @@ Function WaitResultToStr(WaitResult: TWaitResult): String;
 implementation
 
 uses
-  Classes,
+  Classes, Math,
   StrRect, InterlockedOps;
 
 {$IFDEF FPC_DisableWarns}
@@ -1613,6 +1728,13 @@ begin
 Create(nil,Name);
 end;
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TComplexWinSyncObject.Create;
+begin
+Create(nil,'');
+end;
+
 //------------------------------------------------------------------------------
 
 constructor TComplexWinSyncObject.Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String);
@@ -1844,7 +1966,7 @@ repeat
             Dec(fCondSharedData^.WakeCount);
             If (fCondSharedData^.WakeCount <= 0) and fCondSharedData^.Broadcasting then
               begin
-                fCondSharedData^.WakeCount := 0; 
+                fCondSharedData^.WakeCount := 0;
                 fCondSharedData^.Broadcasting := False;
                 SetEvent(fBroadcastDoneLock);
               end;
@@ -2185,6 +2307,14 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+constructor TBarrier.Create;
+begin
+Create(nil,1,'');
+end;
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 constructor TBarrier.Create(SecurityAttributes: PSecurityAttributes; Count: Integer; const Name: String);
 begin
 inherited Create(SecurityAttributes,Name);
@@ -2201,6 +2331,13 @@ end;
 constructor TBarrier.Create(Count: Integer; const Name: String);
 begin
 Create(nil,Count,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TBarrier.Create(Count: Integer);
+begin
+Create(nil,Count,'');
 end;
 
 //------------------------------------------------------------------------------
@@ -2319,9 +2456,749 @@ end;
 
 {===============================================================================
 --------------------------------------------------------------------------------
-                               Utility functions
+                                 TReadWriteLock
 --------------------------------------------------------------------------------
 ===============================================================================}
+{===============================================================================
+    TReadWriteLock - thread-local data
+===============================================================================}
+threadvar
+  WSO_TLSVAR_RWL_ReadLockCount:   UInt32;   // initialized to 0
+  WSO_TLSVAR_RWL_HoldsWriteLock:  Boolean;  // initialized to false
+
+{===============================================================================
+    TReadWriteLock - class implementation
+===============================================================================}
+
+
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                                 Wait functions
+--------------------------------------------------------------------------------
+===============================================================================}
+const
+  MWMO_WAITALL        = DWORD($00000001);
+  MWMO_ALERTABLE      = DWORD($00000002);
+  MWMO_INPUTAVAILABLE = DWORD($00000004);
+
+const
+  MAXIMUM_WAIT_OBJECTS = 3; {$message 'debug'}  
+
+{===============================================================================
+    Wait functions - internal functions (limited count)
+===============================================================================}
+
+Function MaxWaitObjCount(MsgWaitOptions: TMessageWaitOptions): Integer;
+begin
+If mwoEnable in MsgWaitOptions then
+  Result := MAXIMUM_WAIT_OBJECTS - 1
+else
+  Result := MAXIMUM_WAIT_OBJECTS;
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForMultipleHandles_Sys(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+var
+  WaitResult: DWORD;
+  MsgFlags:   DWORD;
+begin
+If (Count > 0) and (Count <= MaxWaitObjCount(MsgWaitOptions)) then
+  begin
+    Index := -1;
+    If mwoEnable in MsgWaitOptions then
+      begin
+        // waiting with messages, construct flags
+        MsgFlags := 0;
+        If WaitAll then
+          MsgFlags := MsgFlags or MWMO_WAITALL;
+        If Alertable then
+          MsgFlags := MsgFlags or MWMO_ALERTABLE;
+        If mwoInputAvailable in MsgWaitOptions then
+          MsgFlags := MsgFlags or MWMO_INPUTAVAILABLE;
+        WaitResult := MsgWaitForMultipleObjectsEx(DWORD(Count),{$IFDEF FPC}LPHANDLE{$ELSE}PWOHandleArray{$ENDIF}(Handles),Timeout,WakeMask,MsgFlags);
+      end
+    // "normal" waiting
+    else WaitResult := WaitForMultipleObjectsEx(DWORD(Count),{$IFDEF FPC}LPHANDLE{$ELSE}PWOHandleArray{$ENDIF}(Handles),WaitAll,Timeout,Alertable);
+    // process result
+    case WaitResult of
+      WAIT_OBJECT_0..
+      Pred(WAIT_OBJECT_0 + MAXIMUM_WAIT_OBJECTS):
+        If not(mwoEnable in MsgWaitOptions) or (Integer(WaitResult - WAIT_OBJECT_0) < Count) then
+          begin
+            Result := wrSignaled;
+            If not WaitAll then
+              Index := Integer(WaitResult - WAIT_OBJECT_0);
+          end
+        else Result := wrMessage;
+      WAIT_ABANDONED_0..
+      Pred(WAIT_ABANDONED_0 + MAXIMUM_WAIT_OBJECTS):
+        If not(mwoEnable in MsgWaitOptions) or (Integer(WaitResult - WAIT_ABANDONED_0) < Count) then
+          begin
+            Result := wrAbandoned;
+            If not WaitAll then
+              Index := Integer(WaitResult - WAIT_ABANDONED_0);
+          end
+        else Result := wrError;
+      WAIT_IO_COMPLETION:
+        Result := wrIOCompletion;
+      WAIT_TIMEOUT:
+        Result := wrTimeout;
+      WAIT_FAILED:
+        Result := wrError;
+    else
+      Result := wrError;
+    end;
+    If Result = wrError then
+      Index := Integer(GetLastError);
+  end
+else raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleHandles_Sys: Invalid handle count (%d).',[Count]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForMultipleObjects_Internal(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+var
+  Handles:  array of THandle;
+  i:        Integer;
+begin
+If Length(Objects) > 0 then
+  begin
+    SetLength(Handles,Length(Objects));
+    For i := Low(Objects) to High(Objects) do
+      Handles[i] := Objects[i].Handle;
+    Result := WaitForMultipleHandles_Sys(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
+  end
+else raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleObjects_Internal: Invalid object count (%d).',[Length(Objects)]);
+end;
+
+{===============================================================================
+    Wait functions - internal functions (unlimited count)
+===============================================================================}
+{
+  invoker_thread - level --- stage_0 - wait_thread - group
+                          |- stage_1 - wait_thread - group
+                         ...
+                          |- stage_N - wait_thread - group
+                          |- stage_M - wait_thread - level --- stage_0 - wait_thread - group
+                                                            |- stage_1 - wait_thread - group
+                                                           ...
+                                                            |- stage_N - wait_thread - group
+}
+type
+  TWSOWaitGroupHandles = array[0..Pred(MAXIMUM_WAIT_OBJECTS)] of THandle;
+
+  TWSOWaitGroup = record
+    Handles:    TWSOWaitGroupHandles;
+    HandlesPtr: PHandle;
+    Count:      Integer;      // must be strictly above zero
+    IndexBase:  Integer;      // index of the first item in the original array
+    // result
+    WaitResult: TWaitResult;  // init to wrError
+    Index:      Integer;      // init to -1
+  end;
+  PWSOWaitGroup = ^TWSOWaitGroup;
+
+  PWSOWaitLevel = ^TWSOWaitLevel;
+
+{
+  Wait stage corresponds to one wait thread.
+
+  Branching stage corresponds to a waiting threads that is calling either
+  WaitForManyHandles_All or WaitForManyHandles_One.
+
+  Non-branching stage corresponds to a threads that is calling function
+  WaitForMultipleHandles_Sys and waits directly on that call.
+}
+  TWSOWaitStage = record
+    case Branching: Boolean of
+      True:   (WaitLevel: PWSOWaitLevel);
+      False:  (WaitGroup: TWSOWaitGroup);
+  end;
+
+{
+  Wait level corresponds to a call to function WaitForManyHandles_All or
+  WaitForManyHandles_One.
+}
+  TWSOWaitLevel = record
+    WaitStages: array of TWSOWaitStage;
+    // result
+    WaitResult: TWaitResult;  // init to wrError
+    Index:      Integer;      // init to -1    
+  end;
+
+  TWSOWaitParams = record
+    RootWaitLevel:      TWSOWaitLevel;
+    // wait parameters
+    WaitAll:            Boolean;
+    Timeout:            DWORD;
+    Alertable:          Boolean;
+    MsgWaitOptions:     TMessageWaitOptions;
+    WakeMask:           DWORD;
+    // internals and result
+    FirstSpawn:         Boolean;  // interlocked, when spawning wait threads for the first time, allow alertable and message waiting
+    LastAssignedStage:  Integer;  // interlocked, init to -1
+    GroupFirstDone:     Integer;  // interlocked, init to -1
+  end;
+  PWSOWaitParams = ^TWSOWaitParams;
+
+{===============================================================================
+    Utility functions - waiter thread declaration
+===============================================================================}
+type
+  TWSOWaiterThread = class(TThread)
+  protected
+    fFreeMark:        Integer;
+    fWaitParams:      PWSOWaitParams;
+    fWaitGroupIndex:  Integer;
+    procedure Execute; override;
+  public
+    constructor Create(WaitParams: PWSOWaitParams; WaitGroupIndex: Integer);
+    Function MarkForAutoFree: Boolean; virtual;
+  end;
+
+{===============================================================================
+    Utility functions - waiter thread implementation
+===============================================================================}
+
+procedure WaitForManyHandles_Thread(WaitParams: PWSOWaitParams; WaitGroupIndex: Integer); forward;
+
+{-------------------------------------------------------------------------------
+    Utility functions - waiter thread protected methods
+-------------------------------------------------------------------------------}
+
+procedure TWSOWaiterThread.Execute;
+begin
+WaitForManyHandles_Thread(fWaitParams,fWaitGroupIndex);
+If InterlockedExchange(fFreeMark,-1) <> 0 then
+  FreeOnTerminate := True;
+end;
+
+{-------------------------------------------------------------------------------
+    Utility functions - waiter thread public methods
+-------------------------------------------------------------------------------}
+
+constructor TWSOWaiterThread.Create(WaitParams: PWSOWaitParams; WaitGroupIndex: Integer);
+var
+  i:  Integer;
+begin
+inherited Create(False);
+FreeOnTerminate := False;
+InterlockedStore(fFreeMark,0);
+fWaitParams := WaitParams;
+fWaitGroupIndex := WaitGroupIndex;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TWSOWaiterThread.MarkForAutoFree: Boolean;
+begin
+Result := InterlockedExchange(fFreeMark,-1) = 0;
+end;
+
+{===============================================================================
+    Wait functions - internal functions (unlimited count) - continuation
+===============================================================================}
+
+Function WaitForManyHandles_One(WaitParams: PWSOWaitParams): TWaitResult;
+var
+  Releaser:             TEvent;
+  WaiterThreads:        array of TWSOWaiterThread;
+  WaiterThreadsHandles: array of THandle;
+  ThreadWaitParams:     TWSOWaitParams;
+  i,j,Cntr:             Integer;
+begin
+(*
+{
+  There is more than MaxWaitObjCount handles to be waited and if any single one
+  of them gets signaled, the waiting will end.
+
+  Last handle is expected to be a releaser event.
+
+  We spawn appropriate number of waiter threads and split the handles between
+  them. Each thread will, along with its portion of handles, get a handle to
+  releaser.
+
+  When one of the handles get signaled and waiting in this function ends, the
+  releaser is set to signaled. And since every thread has it among its wait
+  handles, they all end their waiting and exit.
+}
+Releaser := TEvent.DuplicateFrom(WaitParams.Handles[High(WaitParams.Handles)]);
+try
+{
+  Create and fill waiter threads, each thread gets a releaser as its last
+  handle.
+}
+  SetLength(WaiterThreads,Min(Ceil(Pred(Length(WaitParams.Handles)) / Pred(MAXIMUM_WAIT_OBJECTS)),MaxWaitObjCount(WaitParams.MsgWaitOptions)));
+  SetLength(WaiterThreadsHandles,Length(WaiterThreads));
+
+
+finally
+{
+  Free the releaser. Note that it has duplicate handle, so freeing it will not
+  destroy the original object.
+}
+  Releaser.Free;
+end;
+*)
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForManyHandles_All(WaitParams: PWSOWaitParams): TWaitResult;
+var
+  WaiterThreads:        array of TWSOWaiterThread;
+  WaiterThreadsHandles: array of THandle;
+  ThreadWaitParams:     TWSOWaitParams;
+  i,j,Cntr:             Integer;
+begin
+(*
+{
+  There is more than MaxWaitObjCount handles to be waited on and we will be
+  waiting until all of them are signaled.
+
+  We spawn appropriate number of waiter threads (but at most maximum wait
+  objects count, ie. 64) and split the handles between them. Each thread will
+  then wait on a portion of handles and we will wait on the waiter threads.
+
+  Note that the wait threads can each get more than maximum wait objects count
+  of objects. If this happens, the wait thread will call this function again
+  with its own portion of wait objects, effectively spawning new sub-threads.
+  This can go as deep as the system resources allows.
+
+  When handles will become signaled or their waiting ends in other ways (error,
+  timeout, ...), the waiter threads will end their waiting and become in turn
+  signaled too, at which point this function finishes and exits.
+}
+{
+  Prepare waiter threads and fill them with handles to wait on.
+
+  Note that the waiter threads can get full MAXIMUM_WAIT_OBJECTS and more since
+  none of them will wait on messages or any other specialities.
+}
+// prepare array of waiter threads / wait handles
+SetLength(WaiterThreads,Min(Ceil(Length(WaitParams.Handles) / MAXIMUM_WAIT_OBJECTS),MaxWaitObjCount(WaitParams.MsgWaitOptions)));
+SetLength(WaiterThreadsHandles,Length(WaiterThreads));
+// create and fill waiter threads
+Cntr := Low(WaitParams.Handles);
+For i := Low(WaiterThreads) to High(WaiterThreads) do
+  begin
+    CopyWaitParams(WaitParams,ThreadWaitParams,True);
+    If i < High(WaiterThreads) then
+      SetLength(ThreadWaitParams.Handles,Min(Ceil(Length(WaitParams.Handles) / Length(WaiterThreads)),MAXIMUM_WAIT_OBJECTS))
+    else
+      SetLength(ThreadWaitParams.Handles,Length(WaitParams.Handles) - Cntr);
+    ResolveWaitParamsPointers(ThreadWaitParams);
+    // copy handles for this wait thread
+    For j := Low(ThreadWaitParams.Handles) to High(ThreadWaitParams.Handles) do
+      begin
+        ThreadWaitParams.Handles[j] := WaitParams.Handles[Cntr];
+        Inc(Cntr);
+      end;
+    {
+      Threads enter their internal waiting immediately.
+
+      Any waiter thread can finish even before its handle is obtained, but
+      the handle should still be walid and usable in waiting since no thread
+      is freed automatically.
+    }
+    WaiterThreads[i] := TWSOWaiterThread.Create(ThreadWaitParams);
+    WaiterThreadsHandles[i] := WaiterThreads[i].Handle;
+  end;
+{
+  Now wait on all waiter threads with no timeout - the timeout is in effect
+  for objects we are waiting on, which the waiter threads are not.
+
+  Result of the entire function is set to the result of this waiting.
+}
+Result := WaitForMultipleHandles_Sys(Addr(WaiterThreadsHandles[Low(WaiterThreadsHandles)]),Length(WaiterThreadsHandles),
+                                     True,INFINITE,Index,WaitParams.Alertable,WaitParams.MsgWaitOptions,WaitParams.WakeMask);
+Index := -1;  // index from wait function is of no use here
+{
+  We have to process result from waiting on the waiter threads.
+
+  For wrSignaled and wrAbandoned, we traverse all threads and check their
+  results, as it is possible that some (or even all) of them ended with
+  result being other than wrSignaled or wrAbandoned.
+  If we encounter "worse" result than is set by waiting on the waiting threads,
+  then such result will become a new result of this function.
+  If wrError is encountered in any thread, then the traversing will end at that
+  point, result of this function will be set to wrError and Index will be set
+  to Index of that particular waiter thread (which should contain error code).
+
+  wrIOCompletion and wrMessage are taken as they are and nothing is done about
+  then. Note that these results should only be possible in thread that initiated
+  the waiting, as all waiter threads are in non-alertable non-message waiting.
+
+  wrTimeout should not happen, so we are treating it as a critical error.
+
+  wrError indicates something bad has happened, and since the error originates
+  from waiting on waiter threads and not on the original objects, it is again
+  treated as critical error, not as an error to be reported along with error
+  code.
+}
+case Result of
+  wrSignaled,
+  wrAbandoned:    begin
+                    // Check whether all waiter threads ended with result
+                    // being signaled or abandoned.
+                    For i := Low(WaiterThreads) to High(WaiterThreads) do
+                      If WaiterThreads[i].Result > Result then
+                        begin
+                          Result := WaiterThreads[i].Result;
+                          If Result = wrError then
+                            begin
+                              Index := WaiterThreads[i].Index;
+                              Break{For i};
+                            end;
+                        end;
+                  end;
+  wrIOCompletion: Index := -1;  // do nothing, only possible in an alertable waiting in the initiating thread
+  wrMessage:      Index := -1;  // do nothing, only possible in a message waiting in the initiating thread
+  wrTimeout:      raise EWSOWaitError.Create('WaitForManyHandles_HighAll: Wait timeout not allowed here.');
+  wrError:        raise EWSOWaitError.CreateFmt('WaitForManyHandles_HighAll: Wait error (%d).',[GetLastError]);
+else
+ {some nonsensical result, should not happen}
+  raise EWSOWaitError.CreateFmt('WaitForManyHandles_HighAll: Invalid wait result (%d).',[Ord(Result)]);
+end;
+{
+  Some waiter threads might be still waiting. We do not need them anymore and
+  forcefull termination is not a good idea at this point, so we mark them for
+  automatic freeing at their termination and leave them to their fate (all
+  waiter threads, if still present, will be terminated at the program exit).
+
+  If any thread already finished its waiting (in which case its method
+  MarkForAutoFree returns false), then it is freed immediately.
+}
+For i := Low(WaiterThreads) to High(WaiterThreads) do
+  If not WaiterThreads[i].MarkForAutoFree then
+    begin
+      WaiterThreads[i].WaitFor;
+      WaiterThreads[i].Free;
+    end;
+*)
+end;
+
+//------------------------------------------------------------------------------
+
+procedure WaitForManyHandles_Thread(WaitParams: PWSOWaitParams; WaitGroupIndex: Integer);
+begin
+(*
+{
+  This function is only called from waiter threads, so no alertable or message
+  waiting is allowed here, therefore do not pass those arguments to final wait.
+}
+If WaitGroupIndex < 0 then
+  begin
+    // branching waiter thread (will spawn more waiter threads)
+    If WaitParams^.WaitAll then
+      WaitForManyHandles_HighAll(WaitParams)
+    else
+      WaitForManyHandles_HighOne(WaitParams);
+  end
+else
+  begin
+    // leaf waiter thread, do the waiting
+    WaitParams^.WaitGroups[WaitGroupIndex].WaitResult := WaitForMultipleHandles_Sys(
+      WaitParams^.WaitGroups[WaitGroupIndex].HandlesPtr,
+      WaitParams^.WaitGroups[WaitGroupIndex].Count,
+      WaitParams^.WaitAll,
+      WaitParams^.Timeout,
+      WaitParams^.WaitGroups[WaitGroupIndex].Index,
+      False,[],0);
+    // if the GroupFirstDone is still in its initial state (-1), assign index of this group
+    InterlockedCompareExchange(WaitParams^.GroupFirstDone,WaitGroupIndex,-1);
+  end;
+*)
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForManyHandles_Internal(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+var
+  WaitParams: TWSOWaitParams;
+  i,j,Cntr:   Integer;
+  TempHPtr:   PHandle;
+  Releaser:   TEvent;
+(*
+  Function WaitGroupHandlesHigh(const HandlesArray: TWSOStaticHandleArray): Integer;
+  begin
+    If WaitAll then
+      Result := High(HandlesArray)
+    else
+      Result := High(HandlesArray) - 1;
+  end;
+*)
+begin
+(*
+Index := -1;
+If Count > 0 then
+  begin
+    If Count > MaxWaitObjCount(MsgWaitOptions) then
+      begin
+      {
+        More than maximum waited objects (64/63)- construct wait parameters.
+        First split handles into wait groups...
+      }
+        SetLength(WaitParams.WaitGroups,Ceil(Count / MaxWaitObjCount(MsgWaitOptions)));
+        // init all wait groups and fill them with handles
+        Cntr := 0;
+        TempHPtr := Handles;
+        For i := Low(WaitParams.WaitGroups) to High(WaitParams.WaitGroups) do
+          begin
+            WaitParams.WaitGroups[i].HandlesPtr := Addr(WaitParams.WaitGroups[i].Handles);
+            WaitParams.WaitGroups[i].Count := 0;
+            WaitParams.WaitGroups[i].IndexBase := Cntr;
+            WaitParams.WaitGroups[i].WaitResult := wrError;
+            WaitParams.WaitGroups[i].Index := -1;
+            For j := Low(WaitParams.WaitGroups[i].Handles) to WaitGroupHandlesHigh(WaitParams.WaitGroups[i].Handles) do
+              begin
+                WaitParams.WaitGroups[i].Handles[j] := TempHPtr^;
+                Inc(WaitParams.WaitGroups[i].Count);
+                Inc(Cntr);
+                Inc(TempHPtr); // should advance the pointer by a size of THandle
+                If Cntr >= Count then
+                  Break{For j};
+              end;
+          end;
+        // assign wait parameters
+        WaitParams.WaitAll := WaitAll;
+        WaitParams.Timeout := Timeout;
+        WaitParams.Alertable := Alertable;
+        WaitParams.MsgWaitOptions := MsgWaitOptions;
+        WaitParams.WakeMask := WakeMask;
+        // initialize internals and results
+        WaitParams.FirstSpawn := True;
+        InterlockedStore(WaitParams.LastAsignedGroup,-1);
+        InterlockedStore(WaitParams.GroupFirstDone,-1);
+        // branch processing
+        If not WaitAll then
+          begin
+          {
+            Wait for at least one object to become signaled.
+
+            Add releaser event at the end of each wait group handle array.
+
+            As the waiting will be split into multiple threads, the first wait
+            thread returning will cause the wait call to return too, but other
+            threads might be still waiting.
+            So we set the releaser to signaled, which will release all threads
+            that are still waiting (they will be automatically freed).
+          }
+            Releaser := TEvent.Create(nil,True,False,''); // manual reset, nonsignaled
+            try
+              For i := Low(WaitParams.WaitGroups) to High(WaitParams.WaitGroups) do
+                begin
+                  WaitParams.WaitGroups[i].Handles[WaitParams.WaitGroups[i].Count] := Releaser.Handle;
+                  Inc(WaitParams.WaitGroups[i].Count);
+                end;
+              // wait...  
+              Result := WaitForManyHandles_HighOne(@WaitParams);
+              // at least one waiter thread returned, release all others
+              Releaser.SetEvent;
+            finally
+              Releaser.Free;
+            end;
+          end
+        // wait for all objects to be signaled
+        else Result := WaitForManyHandles_HighAll(@WaitParams);
+        {$message 'process result'}
+      end
+    // there is less than or equal to maximum number of objects, do simple wait
+    else Result := WaitForMultipleHandles_Sys(Handles,Count,WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
+  end
+else raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForManyHandles_Internal: Invalid handle count (%d).',[Count]);
+*)
+end;
+
+{===============================================================================
+    Wait functions - public functions
+===============================================================================}
+
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+begin
+Result := WaitForMultipleHandles_Sys(Handles,Count,WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult;
+begin
+Result := WaitForMultipleHandles_Sys(Handles,Count,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForMultipleHandles_Sys(Handles,Count,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForMultipleHandles_Sys(Handles,Count,WaitAll,INFINITE,Index,False,[],0);
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForMultipleHandles_Sys(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForMultipleHandles_Sys(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,[],0)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult;
+var
+  Index:  Integer;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForMultipleHandles_Sys(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,[],0)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult;
+var
+  Index:  Integer;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForMultipleHandles_Sys(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,INFINITE,Index,False,[],0)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+begin
+Result := WaitForMultipleObjects_Internal(Objects,WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult;
+begin
+Result := WaitForMultipleObjects_Internal(Objects,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForMultipleObjects_Internal(Objects,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForMultipleObjects_Internal(Objects,WaitAll,INFINITE,Index,False,[],0);
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+begin
+Result := WaitForManyHandles_Internal(Handles,Count,WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult;
+begin
+Result := WaitForManyHandles_Internal(Handles,Count,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForManyHandles_Internal(Handles,Count,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForManyHandles_Internal(Handles,Count,WaitAll,INFINITE,Index,False,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForManyHandles_Internal(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForManyHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForManyHandles_Internal(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,[],0)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForManyHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult;
+var
+  Index:  Integer;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForManyHandles_Internal(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,[],0)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForManyHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult;
+var
+  Index:  Integer;
+begin
+If Length(Handles) > 0 then
+  Result := WaitForManyHandles_Internal(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,INFINITE,Index,False,[],0)
+else
+  raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForManyHandles: Invalid handle count (%d).',[Length(Handles)]);
+end;
+
+
 (*
 {$IF not Declared(MWMO_INPUTAVAILABLE)}
 const
@@ -2881,6 +3758,12 @@ end;
 
 //------------------------------------------------------------------------------
 *)
+{===============================================================================
+--------------------------------------------------------------------------------
+                               Utility functions
+--------------------------------------------------------------------------------
+===============================================================================}
+
 Function WaitResultToStr(WaitResult: TWaitResult): String;
 const
   WR_STRS: array[TWaitResult] of String = ('Signaled','Abandoned','IOCompletion','Message','Timeout','Error');
@@ -2897,24 +3780,34 @@ end;
                                Unit initialization
 --------------------------------------------------------------------------------
 ===============================================================================}
-(*
-procedure Initialize;
+
+procedure HandleArrayItemsStrideCheck(Handles: array of THandle);
 var
   TestArray:  array of THandle;
 begin
 {
-  Check whether array of handles does or does not have some gaps (due to
-  alignment) between items - current implementation assumes it doesn't.
+  Check whether array of handles (including open array) does or does not have
+  some gaps (due to alignment) between items - current implementation assumes
+  it doesn't.
 }
+If (PtrUInt(Addr(Handles[Succ(Low(Handles))])) - PtrUInt(Addr(Handles[Low(Handles)]))) <> SizeOf(THandle) then
+  raise EWSOException.Create('HandleArrayItemsStrideCheck: Unsupported implementation detail (open array items alignment).');
 SetLength(TestArray,2);
 If (PtrUInt(Addr(TestArray[Succ(Low(TestArray))])) - PtrUInt(Addr(TestArray[Low(TestArray)]))) <> SizeOf(THandle) then
-  raise EWSOException.Create('Initialize: Unsupported implementation detail (array items alignment).');
+  raise EWSOException.Create('HandleArrayItemsStrideCheck: Unsupported implementation detail (array items alignment).');
+end;
+
+//------------------------------------------------------------------------------
+
+procedure Initialize;
+begin
+HandleArrayItemsStrideCheck([THandle(0),THandle(1)]);
 end;
 
 //------------------------------------------------------------------------------
 
 initialization
   Initialize;
-*)
+
 end.
 
