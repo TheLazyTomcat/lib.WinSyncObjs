@@ -100,11 +100,14 @@ type
   EWSOInvalidObject          = class(EWSOException);
   EWSOOpenError              = class(EWSOException);
   EWSOTimeConversionError    = class(EWSOException);
+
   EWSOWaitError              = class(EWSOException);
   EWSOUnsupportedObject      = class(EWSOException);
   EWSOAutoCycleError         = class(EWSOException);
   EWSOInvalidValue           = class(EWSOException);
+
   EWSOMultiWaitInvalidCount  = class(EWSOException);
+  EWSOMultiWaitError         = class(EWSOException);
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -725,7 +728,11 @@ const
   QS_ALLEVENTS      = QS_INPUT or QS_POSTMESSAGE or QS_TIMER or QS_PAINT or QS_HOTKEY;
   QS_ALLINPUT       = QS_INPUT or QS_POSTMESSAGE or QS_TIMER or QS_PAINT or QS_HOTKEY or QS_SENDMESSAGE;
 
-//------------------------------------------------------------------------------
+{===============================================================================
+--------------------------------------------------------------------------------
+                            Wait functions (N <= MAX)
+--------------------------------------------------------------------------------
+===============================================================================}
 {
   Waits on multiple handles - the function does not return until wait criteria
   are met, an error occurs or the wait times-out (which of these occured is
@@ -767,8 +774,8 @@ const
   Default value is an empty set, meaning message waiting is disabled.
 
   Argument WakeMask is used without change when message waiting is enabled
-  (it prescribes which messages to observe), otherwise it is ignored. Use OR
-  to combine multiple values. Default value is zero.
+  (it prescribes which messages to observe), otherwise it is ignored. Use
+  bitwise OR to combine multiple values. Default value is zero.
 }
 Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
@@ -798,8 +805,92 @@ Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll:
 Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 
-//------------------------------------------------------------------------------
+{===============================================================================
+--------------------------------------------------------------------------------
+                            Wait functions (N > MAX)
+--------------------------------------------------------------------------------
+===============================================================================}
+{-------------------------------------------------------------------------------
+                              >>> WARNING <<<
+--------------------------------------------------------------------------------
 
+  Waiting on many objects is not completely tested and, given its complexity
+  and somewhat "thick" code, should be considered strictly experimental.
+
+--------------------------------------------------------------------------------
+
+  Waiting for many objects - generally, these functions behave the same as
+  WaitForMultipleObjects and can accept the same object types. But given the
+  implementation (described further), there are serious limitations that,
+  unfortunately, cannot be eliminated.
+
+  First, it is not possible to use them for mutexes. Mutex is owned by a thread
+  that finished waiting on it. And since the implementation works with waiter
+  threads, the ownership is granted to the waiter thread and not the thread that
+  invoked the waiting. The waiter threads are created and destroyed ad-hoc, so
+  when the waiting returns, the mutex will already be abandoned.
+
+  Second, when waiting on only one object to become signaled, it cannot be
+  guaranteed that the (by index) indicated object was the first to become
+  signaled. In fact, it cannot be guaranteed that only one object was signaled
+  before the waiting ended. This is especially problematic for objects with
+  mutable state (eg. synchronization objects) - the waiting changes their state
+  and, because there are multiple independent waitings, more than one object
+  can be changed. Moreover, it cannot be discerned which objects, or how many
+  of them, were affected beyond the indicated one.
+
+  To sum it up, it is highly discouraged to use waiting on many objects with
+  mutable-state. You can safely use it for waiting on threads, processes, and
+  to some extent on manual-reset events.
+
+    NOTE - When calling WaitForManyHandles with number of wait objects (handles)
+           lower than the maximum enforced for the system calls, it will behave
+           exactly the same as WaitForMultipleObjects. In fact, it will redirect
+           to that set of functions, so you can safely use it in such scenario.
+
+  And now for some implementation details...
+
+    Since Windows API function WaitForMultipleObjects does not allow for more
+    than 64 or 63 objects to be waited on (63 in case of message waiting - that
+    is, waiting that can return when a message is delivered to the waiting
+    thread), we have to do our own implementation for cases where waiting on
+    more objects is required.
+    Generally, waiting on more than about a dozen objects is a sign of bad
+    design, but that will not stop us, right?
+
+    The handles we want to wait on are split into wait groups, each containing
+    at most 64 objects/handles. For each wait group, a waiter thread is created,
+    this thread will wait on its wait group using normal (limited-count)
+    waiting.
+    We will then wait on the created waiter threads to finish. This is done in
+    a so-called wait level. Note that, in this waiting, the number of threads
+    we will wait for is too limited to 64.
+
+    If there are more wait groups than 64, the selected solution is to create
+    a new thread that, instead of waiting for one wait group, will wait for
+    another wait level. This thread will be added in current level to a waiting
+    for waiter threads which are already waiting on wait groups.
+
+    Lets use some graphics to clarify:
+
+      invoker - wait_level_0 --- waiter_thread - wait_group_0
+                              |- waiter_thread - wait_group_1
+                             ...
+                              |- waiter_thread - wait_group_n
+                              |- waiter_thread - wait_level_1 --- waiter_thread - wait_group_n+1
+                                                               |- waiter_thread - wait_group_n+2
+                                                              ...
+                                                               |- waiter_thread - wait_group_m
+                                                               |- waiter_thread - wait_level_2 --- waiter_thread - wait_group_m+1
+                                                                                                |- waiter_thread - wait_group_m+2
+                                                                                               ...
+
+    ...and so on. The tree can be as deep as resources allow. Note that the tree
+    is not balanced - that is, only one branch in a level can be another level.
+    This was selected to simplify implementation - since each level can wait for
+    more than 4000 objects, it is unlikely that any sane use will spawn more
+    than one level.
+}
 Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
@@ -2707,18 +2798,6 @@ end;
 {===============================================================================
     Wait functions (N > MAX) - implementation types
 ===============================================================================}
-{
-  invoker_thread - level --- stage_0 - wait_thread - group
-                          |- stage_1 - wait_thread - group
-                         ...
-                          |- stage_n - wait_thread - group
-                          |- stage_m - wait_thread - level --- stage_0 - wait_thread - group
-                                                            |- stage_1 - wait_thread - group
-                                                           ...
-                                                            |- stage_n - wait_thread - group
-}
-{$message '^^rework^^'}
-
 type
   TWSOWaitParams = record
     WaitAll:        Boolean;
@@ -2750,17 +2829,32 @@ type
   TWSOWaitInternals = record
   {
     ReadyCounter is initally set to a number of all waits within the tree
-    (including waits for waiter threads). It is atomically decremented before
-    each wait. When it is above zero after the decrement, enter waiting on
-    ReadyEvent. When it reaches zero, waiting is not entered and, instead,
-    the ReadyEvent is set (to signaled), which will release all waiting threads
-    at once and they will then enter the main waiting.
+    (including level waits). It is atomically decremented before each wait.
+    When it is above zero after the decrement, enter waiting on ReadyEvent.
+    When it reaches zero, waiting is not entered and, instead, the ReadyEvent
+    is set (to signaled), which will release all waiting threads at once and
+    they will then enter the main waiting.
 
-    Note that this is done only when waiting for one object. It is pointless
-    in waiting for all objects.
+    This is done to minimize time in which all waiter threads enter their
+    waitings.
   }
     ReadyCounter:   Integer;
     ReadyEvent:     THandle;
+  {
+    DoneCounter is again initialized to a total number of waits.
+    It is decremented each time a waiting for wait group or in a wait level
+    ends. When it reaches zero, the DoneEvent is set to signaled.
+
+    The DoneEvent is created non-signaled. When a level wait executed by the
+    invoker returns, the invoker immediately enters waiting on this event.
+    It is set when all waitings end their execution, then the invoker is
+    released from waiting on this event and can continue its work (processing
+    and returning results).
+    It is meant as a memory integrity protection - the waiter threads are
+    accessing memory that belongs to a variable which is local to the invoker.
+    This ensures all threads will end before the invoker can invalidate this
+    variable.
+  }
     DoneCounter:    Integer;
     DoneEvent:      THandle;
     ReleaserEvent:  THandle;
@@ -2858,7 +2952,7 @@ try
     WaitResult := WaitForMultipleHandles_Sys(HandlesPtr,Count,WaitAll,Timeout,Index,False,[],0);
   // if the FirstDone is still in its initial state (-1), assign indices of this group and level
   InterlockedCompareExchange(fWaitArgs^.WaitInternals.FirstDone,UInt64Get(fWaitLevelIndex,fWaitGroupIndex),UInt64(-1));
-  // if waiting for one object, signal other waits that we already got the "winner"
+  // if waiting for one object, signal other waits that we have already got the "winner"
   If not fWaitArgs^.WaitParams.WaitAll then
     SetEvent(fWaitArgs^.WaitInternals.ReleaserEvent);
 except
@@ -2902,8 +2996,7 @@ type
     Wait functions (N > MAX) - TWSOLevelWaiterThread class implementation
 ===============================================================================}
 
-procedure WaitForManyHandles_All(WaitArgs: PWSOWaitArgs; WaitLevelIndex: Integer); forward;
-procedure WaitForManyHandles_One(WaitArgs: PWSOWaitArgs; WaitLevelIndex: Integer); forward;
+procedure WaitForManyHandles_Level(WaitArgs: PWSOWaitArgs; WaitLevelIndex: Integer); forward;
 
 {-------------------------------------------------------------------------------
     Wait functions (N > MAX) - TWSOLevelWaiterThread protected methods
@@ -2911,11 +3004,8 @@ procedure WaitForManyHandles_One(WaitArgs: PWSOWaitArgs; WaitLevelIndex: Integer
 
 procedure TWSOLevelWaiterThread.Execute;
 begin
-// exception catching is part of called functions
-If fWaitArgs^.WaitParams.WaitAll then
-  WaitForManyHandles_All(fWaitArgs,fWaitLevelIndex)
-else
-  WaitForManyHandles_One(fWaitArgs,fWaitLevelIndex);
+// exception catching is part of called function
+WaitForManyHandles_Level(fWaitArgs,fWaitLevelIndex);
 inherited;
 end;
 
@@ -2933,7 +3023,7 @@ end;
     Wait functions (N > MAX) - internal functions
 ===============================================================================}
 
-procedure WaitForManyHandles_All(WaitArgs: PWSOWaitArgs; WaitLevelIndex: Integer);
+procedure WaitForManyHandles_Level(WaitArgs: PWSOWaitArgs; WaitLevelIndex: Integer);
 var
   IsFirstLevel:         Boolean;
   IsLastLevel:          Boolean;
@@ -2994,7 +3084,8 @@ try
     WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult := WaitForMultipleHandles_Sys(
       Addr(WaiterThreadsHandles[Low(WaiterThreadsHandles)]),
       Length(WaiterThreadsHandles),
-      True,INFINITE,
+      WaitArgs^.WaitParams.WaitAll,
+      INFINITE,
       WaitArgs^.WaitLevels[WaitLevelIndex].Index,
       WaitArgs^.WaitParams.Alertable,
       WaitArgs^.WaitParams.MsgWaitOptions,
@@ -3004,148 +3095,87 @@ try
     WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult := WaitForMultipleHandles_Sys(
       Addr(WaiterThreadsHandles[Low(WaiterThreadsHandles)]),
       Length(WaiterThreadsHandles),
-      True,INFINITE,
+      WaitArgs^.WaitParams.WaitAll,
+      INFINITE,
       WaitArgs^.WaitLevels[WaitLevelIndex].Index,
-      False,[],0);
+      False,
+      [],
+      0);
   // process (possibly invalid) result
   case WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult of
-    wrSignaled:;    // all is good
-    wrAbandoned:    raise EWSOWaitError.Create('WaitForManyHandles_All: Invalid wait result (abandoned).');
+    wrSignaled:;    // all is good, continue
+    wrAbandoned:    raise EWSoMultiWaitError.Create('WaitForManyHandles_Level: Invalid wait result (abandoned).');
     wrIOCompletion: If not IsFirstLevel then
-                      raise EWSOWaitError.Create('WaitForManyHandles_All: Alertablee waiting not allowed here.');
+                      raise EWSoMultiWaitError.Create('WaitForManyHandles_Level: Alertablee waiting not allowed here.');
     wrMessage:      If not IsFirstLevel then
-                      raise EWSOWaitError.Create('WaitForManyHandles_All: Message waiting not allowed here.');
-    wrTimeout:      raise EWSOWaitError.Create('WaitForManyHandles_All: Wait timeout not allowed here.');
-    wrError:        raise EWSOWaitError.CreateFmt('WaitForManyHandles_All: Wait error (%d).',[GetLastError]);
-    wrFatal:        raise EWSOWaitError.Create('WaitForManyHandles_All: Fatal error during waiting.');
+                      raise EWSoMultiWaitError.Create('WaitForManyHandles_Level: Message waiting not allowed here.');
+    wrTimeout:      raise EWSoMultiWaitError.Create('WaitForManyHandles_Level: Wait timeout not allowed here.');
+    wrError:        raise EWSoMultiWaitError.CreateFmt('WaitForManyHandles_Level: Wait error (%d).',[GetLastError]);
+    wrFatal:        raise EWSoMultiWaitError.Create('WaitForManyHandles_Level: Fatal error during waiting.');
   else
-   raise EWSOWaitError.Create('WaitForManyHandles_All: Invalid wait result.');
+   raise EWSoMultiWaitError.CreateFmt('WaitForManyHandles_Level: Invalid wait result (%d).',[Ord(WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult)]);
   end;
-{
-  If the waiting ended with wrSignaled, then all waiter threads have ended by
-  this time. But, if waiting ended with other result, then some waiter threads
-  might be still waiting.
-  We do not need them anymore and forcefull termination is not a good idea at
-  this point, so we mark them for automatic freeing at their termination and
-  leave them to their fate.
-
-  If thread already finished its waiting (in which case its method
-  MarkForAutoFree returns false), then it is freed immediately as it cannot
-  free itself anymore.
-}
-  For i := Low(WaiterThreads) to High(WaiterThreads) do
-    If not WaiterThreads[i].MarkForAutoFree then
-      begin
-        WaiterThreads[i].WaitFor;
-        WaiterThreads[i].Free;
-      end;
-except
-  WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult := wrFatal;
-  WaitArgs^.WaitLevels[WaitLevelIndex].Index := -1;
-end;
-If InterlockedDecrement(WaitArgs^.WaitInternals.DoneCounter) <= 0 then
-  SetEvent(WaitArgs^.WaitInternals.DoneEvent);
-end;
-
-//------------------------------------------------------------------------------
-
-procedure WaitForManyHandles_One(WaitArgs: PWSOWaitArgs; WaitLevelIndex: Integer);
-var
-  IsFirstLevel:         Boolean;
-  IsLastLevel:          Boolean;
-  WaiterThreads:        array of TWSOWaiterThread;
-  WaiterThreadsHandles: array of THandle;
-  i:                    Integer;
-begin
-try
-{
-  There is more than MaxWaitObjCount handles to be waited and if any single one
-  of them gets signaled, the waiting will end.
-
-  Last handle is expected to be a releaser event.
-
-  We spawn appropriate number of waiter threads and split the handles between
-  them. Each thread will, along with its portion of handles, get a handle to
-  the releaser.
-
-  When one of the handles get signaled and any waiting ends, the releaser is
-  set to signaled. And since every thread has it among its wait handles, they
-  all end their waiting and exit.
-}
-  IsFirstLevel := WaitLevelIndex <= Low(WaitArgs^.WaitLevels);
-  IsLastLevel := WaitLevelIndex >= High(WaitArgs^.WaitLevels);
-  // prepare array of waiter threads / wait handles
-  If IsLastLevel then
-    SetLength(WaiterThreads,Length(WaitArgs^.WaitLevels[WaitLevelIndex].WaitGroups))
-  else
-    SetLength(WaiterThreads,Length(WaitArgs^.WaitLevels[WaitLevelIndex].WaitGroups) + 1); // + wait on the next level
-  SetLength(WaiterThreadsHandles,Length(WaiterThreads));
-  // create and fill waiter threads
-  For i := Low(WaiterThreads) to High(WaiterThreads) do
+  If WaitArgs^.WaitParams.WaitAll then
     begin
-      If not IsLastLevel and (i >= High(WaiterThreads)) then
-        WaiterThreads[i] := TWSOLevelWaiterThread.Create(WaitArgs,Succ(WaitLevelIndex))
-      else
-        WaiterThreads[i] := TWSOGroupWaiterThread.Create(WaitArgs,WaitLevelIndex,i);
-      WaiterThreadsHandles[i] := WaiterThreads[i].Handle;
-    end;
-  // waiting...  
-  If InterlockedDecrement(WaitArgs^.WaitInternals.ReadyCounter) > 0 then
-    begin
-      If WaitForSingleObject(WaitArgs^.WaitInternals.ReadyEvent,INFINITE) <> WAIT_OBJECT_0 then
-        raise EWSoWaitError.Create('WaitForManyHandles_One: Failed to wait on ready event.');
+    {
+      If the waiting ended with wrSignaled, then all waiter threads have ended
+      by this time. But, if waiting ended with other result, then some waiter
+      threads might be still waiting.
+      We do not need them anymore and forcefull termination is not a good idea,
+      so we mark them for automatic freeing at their termination and leave them
+      to their fate.
+      If thread already finished its waiting (in which case its method
+      MarkForAutoFree returns false), then it is freed immediately as it cannot
+      free itself anymore.
+
+      Note that the invoking waiting will not end until all the threads finish,
+      this is to protect shared memory.
+    }
+      For i := Low(WaiterThreads) to High(WaiterThreads) do
+        If not WaiterThreads[i].MarkForAutoFree then
+          begin
+            WaiterThreads[i].WaitFor;
+            WaiterThreads[i].Free;
+          end;
     end
-  else SetEvent(WaitArgs^.WaitInternals.ReadyEvent);
-  // the waiting itself...
-  If IsFirstLevel then
-    // first level, use Alertable and Message wait settings
-    WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult := WaitForMultipleHandles_Sys(
-      Addr(WaiterThreadsHandles[Low(WaiterThreadsHandles)]),
-      Length(WaiterThreadsHandles),
-      False,INFINITE,
-      WaitArgs^.WaitLevels[WaitLevelIndex].Index,
-      WaitArgs^.WaitParams.Alertable,
-      WaitArgs^.WaitParams.MsgWaitOptions,
-      WaitArgs^.WaitParams.WakeMask)
   else
-    // second+ level, ignore Alertable and Message wait settings
-    WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult := WaitForMultipleHandles_Sys(
-      Addr(WaiterThreadsHandles[Low(WaiterThreadsHandles)]),
-      Length(WaiterThreadsHandles),
-      False,INFINITE,
-      WaitArgs^.WaitLevels[WaitLevelIndex].Index,
-      False,[],0);
-  // process (possibly invalid) result
-  case WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult of
-    wrSignaled:;    // all is good
-    wrAbandoned:    raise EWSOWaitError.Create('WaitForManyHandles_One: Invalid wait result (abandoned).');
-    wrIOCompletion: If not IsFirstLevel then
-                      raise EWSOWaitError.Create('WaitForManyHandles_One: Alertablee waiting not allowed here.');
-    wrMessage:      If not IsFirstLevel then
-                      raise EWSOWaitError.Create('WaitForManyHandles_One: Message waiting not allowed here.');
-    wrTimeout:      raise EWSOWaitError.Create('WaitForManyHandles_One: Wait timeout not allowed here.');
-    wrError:        raise EWSOWaitError.CreateFmt('WaitForManyHandles_One: Wait error (%d).',[GetLastError]);
-    wrFatal:        raise EWSOWaitError.Create('WaitForManyHandles_One: Fatal error during waiting.');
-  else
-   raise EWSOWaitError.Create('WaitForManyHandles_One: Invalid wait result.');
-  end;      
-{
-  The releaser is set in waiter threads, but in case the waiting for those
-  threads itself ended with non-signaled result (error, message, ...), we
-  have to set it here too to release all the waitings.
-
-  After that, wait for all waiter threads to finish and free them.
-}
-  SetEvent(WaitArgs^.WaitInternals.ReleaserEvent);
-  For i := Low(WaiterThreads) to High(WaiterThreads) do
     begin
-      WaiterThreads[i].WaitFor;
-      WaiterThreads[i].Free;
+    {
+      The releaser is set in waiter threads, but in case the waiting for those
+      threads itself ended with non-signaled result (error, message, ...), we
+      have to set it here too to release all the waitings.
+
+      After that, wait for all waiter threads to finish and free them.
+    }
+      SetEvent(WaitArgs^.WaitInternals.ReleaserEvent);
+      For i := Low(WaiterThreads) to High(WaiterThreads) do
+        begin
+          WaiterThreads[i].WaitFor;
+          WaiterThreads[i].Free;
+        end;
     end;
 except
+{
+  Something really bad happened...
+
+  Set ready event to signalled and signal fatal error.
+
+  The ready counter might not have been decremented if this exception occured
+  before that operation took place. If that is the case, then the ready counter
+  cannot reach zero and consequently, the ready event will never be set. This
+  means all other wait threads will be waiting on ready counter indefinitely.
+
+  To prevent this deadlock, we set the ready event now - the waiting is
+  erroneous anyway, so there is no point in timing protection.
+}
+  SetEvent(WaitArgs^.WaitInternals.ReadyEvent);
   WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult := wrFatal;
   WaitArgs^.WaitLevels[WaitLevelIndex].Index := -1;
 end;
+{
+  Following must be the last operation because it protects acces to shared
+  variable memory.
+}
 If InterlockedDecrement(WaitArgs^.WaitInternals.DoneCounter) <= 0 then
   SetEvent(WaitArgs^.WaitInternals.DoneEvent);
 end;
@@ -3201,12 +3231,12 @@ else
       all waits for next levels (in all levels except the last one, so L - 1),
       plus 1 for messages wait in the first level.
 
-              L = (G + (L - 1) + 1) / M
-              L = (G + L) / M
-             ML = G + L
-         ML - L = G
-       L(M - 1) = G
-              L = G / (M - 1)   <<<
+                L = (G + (L - 1) + 1) / M
+                L = (G + L) / M
+               ML = G + L
+           ML - L = G
+         L(M - 1) = G
+                L = G / (M - 1)   <<<
 
     Non-message waiting
 
@@ -3289,14 +3319,52 @@ end;
 //------------------------------------------------------------------------------
 
 Function WaitForManyHandles_Postprocess(var WaitArgs: TWSOWaitArgs; out Index: Integer): TWaitResult;
+var
+  i,j:            Integer;
+  WaitGroupTemp:  TWSOWaitGroup;
 begin
-{$message 'implement'}
-Result := wrSignaled;
 // check for fatals in levels, then groups
-// check for errors in levels, then groups
-// check for msg or apc in levels other then the first and timeout in all levels (=invalid result)
+For i := Low(WaitArgs.WaitLevels) to High(WaitArgs.WaitLevels) do
+  If WaitArgs.WaitLevels[i].WaitResult = wrFatal then
+    raise EWSOMultiWaitError.CreateFmt('WaitForManyHandles_Postprocess: Fatal error in wait level %d.',[i]);
+For i := Low(WaitArgs.WaitLevels) to High(WaitArgs.WaitLevels) do
+  For j := Low(WaitArgs.WaitLevels[i].WaitGroups) to High(WaitArgs.WaitLevels[i].WaitGroups) do
+    If WaitArgs.WaitLevels[i].WaitGroups[j].WaitResult = wrFatal then
+      raise EWSOMultiWaitError.CreateFmt('WaitForManyHandles_Postprocess: Fatal error in wait group %d-%d.',[i,j]);
+// check for invalid results in all groups (message, IO completion)
+For i := Low(WaitArgs.WaitLevels) to High(WaitArgs.WaitLevels) do
+  For j := Low(WaitArgs.WaitLevels[i].WaitGroups) to High(WaitArgs.WaitLevels[i].WaitGroups) do
+    If WaitArgs.WaitLevels[i].WaitGroups[j].WaitResult in [wrIOCompletion,wrMessage] then
+      raise EWSOMultiWaitError.CreateFmt('WaitForManyHandles_Postprocess: Invalid result in wait group %d-%d (%d).',
+                                         [i,j,Ord(WaitArgs.WaitLevels[i].WaitGroups[j].WaitResult)]);
+// check for errors in groups
+For i := Low(WaitArgs.WaitLevels) to High(WaitArgs.WaitLevels) do
+  For j := Low(WaitArgs.WaitLevels[i].WaitGroups) to High(WaitArgs.WaitLevels[i].WaitGroups) do
+    If WaitArgs.WaitLevels[i].WaitGroups[j].WaitResult = wrError then
+      begin
+        Result := WaitArgs.WaitLevels[i].WaitGroups[j].WaitResult;
+        Index := WaitArgs.WaitLevels[i].WaitGroups[j].Index;
+        Exit;
+      end;
 // check for message or apc in the first level
-// if still good, take the first and resolve index and result (timeout/signaled/abandoned)
+If WaitArgs.WaitLevels[Low(WaitArgs.WaitLevels)].WaitResult in [wrIOCompletion,wrMessage] then
+  begin
+    Result := WaitArgs.WaitLevels[Low(WaitArgs.WaitLevels)].WaitResult;
+    Index := -1;
+    Exit;
+  end;
+// take the first-done and resolve index and result (timeout/signaled/abandoned/error)
+If WaitArgs.WaitInternals.FirstDone <> UInt64(-1) then
+  begin
+    WaitGroupTemp := WaitArgs.WaitLevels[Integer(UInt64Rec(WaitArgs.WaitInternals.FirstDone).Hi)].
+                       WaitGroups[Integer(UInt64Rec(WaitArgs.WaitInternals.FirstDone).Lo)];
+    Result := WaitGroupTemp.WaitResult;
+    If WaitArgs.WaitParams.WaitAll or not(Result in [wrSignaled,wrAbandoned]) then
+      Index := -1
+    else
+      Index := WaitGroupTemp.IndexBase + WaitGroupTemp.Index;
+  end
+else raise EWSOMultiWaitError.Create('WaitForManyHandles_Postprocess: Waiting failed.');
 end;
 
 //------------------------------------------------------------------------------
@@ -3327,27 +3395,22 @@ If Count > 0 then
         // do other preprocessing
         WaitForManyHandles_Preprocess(WaitArgs,Handles,Count);
         // do the waiting
+        WaitForManyHandles_Level(@WaitArgs,Low(WaitArgs.WaitLevels));
         If not WaitAll then
-          begin
-          {
-            Wait for at least one object to become signaled.
+        {
+          Waiting for at least one object became signaled.
 
-            As the waiting will be split into multiple threads, the first wait
-            thread returning will cause the wait call to return too, but other
-            threads might be still waiting.
-            So we set the releaser to signaled, which will release all threads
-            that are still waiting (they will be automatically freed).
-          }
-            WaitForManyHandles_One(@WaitArgs,Low(WaitArgs.WaitLevels));
-            // at least one waiter thread returned, release all others
-            SetEvent(WaitArgs.WaitInternals.ReleaserEvent);
-          end
-        // waiting for all objects to be signaled
-        else WaitForManyHandles_All(@WaitArgs,Low(WaitArgs.WaitLevels));
+          As the waiting is split into multiple threads, the first wait thread
+          returning caused the wait call to return too, but other threads might
+          be still waiting.
+          So we set the releaser to signaled, which will release all threads
+          that are still waiting (they will be automatically freed).
+        }
+          SetEvent(WaitArgs.WaitInternals.ReleaserEvent);
       {
         Wait for all waits to return.
-        Necessary for memory integrity - still running threads might access
-        non-exiting memory, namely WaitArgs variable.
+        Necessary for memory integrity - otherwise still running threads might
+        access non-exiting memory, namely WaitArgs variable.
       }
         If WaitForSingleObject(WaitArgs.WaitInternals.DoneEvent,INFINITE) <> WAIT_OBJECT_0 then
           raise EWSOWaitError.Create('WaitForManyHandles_Internal: Failed to wait for done event.');
@@ -3439,333 +3502,6 @@ else
 end;
 
 
-(*
-
-{===============================================================================
-    Utility functions - internal functions
-===============================================================================}
-
-
-Function WaitForMultipleHandles_HighAll(Handles: PHandle; Count: Integer; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
-var
-  WaiterThreads:  array of TWaiterThread;
-  WaitHandles:    array of THandle;
-  i,j,Cntr:       Integer;
-  HandleTemp:     array of THandle;
-begin
-{
-  There is more than MaxWaitObjCount handles to be waited on and we will be
-  waiting until all of them are signaled.
-
-  We spawn appropriate number of waiter threads and split the handles between
-  them. Each thread will then wait on a portion of handles and we will wait on
-  the waiter threads.
-
-  When handles will become signaled or their waiting ends in other ways (error,
-  timeout, ...), the waiter threads will end their waiting and become in turn
-  signaled too, at which point this function finishes and exists.
-}
-{
-  Prepare waiter threads and will them with handles to wait on.
-
-  Note that the waiter threads can get full MAXIMUM_WAIT_OBJECTS since none of
-  them will wait on messages or any other specialities.
-}
-// prepare array of waiter threads / wait handles
-SetLength(WaiterThreads,Min(Ceil(Count / MAXIMUM_WAIT_OBJECTS),MaxWaitObjCount(MsgWaitOptions)));
-SetLength(WaitHandles,Length(WaiterThreads));
-// create and fill waiter threads
-Cntr := 0;
-For i := Low(WaiterThreads) to High(WaiterThreads) do
-  begin
-    If i < High(WaiterThreads) then
-      SetLength(HandleTemp,Min(Ceil(Count / Length(WaiterThreads)),MAXIMUM_WAIT_OBJECTS))
-    else
-      SetLength(HandleTemp,Count - Cntr);
-    For j := Low(HandleTemp) to High(HandleTemp) do
-      begin
-        HandleTemp[j] := PHandle(PtrUInt(Handles) + PtrUInt(Cntr * SizeOf(THandle)))^;
-        Inc(Cntr);
-      end; 
-    {
-      Threads enter their internal waiting immediately.
-
-      Any waiter thread can finish even before its handle is obtained, but
-      the handle should still be walid and usable in waiting since no thread
-      is freed automatically.
-    }
-    WaiterThreads[i] := TWaiterThread.Create(HandleTemp,True,Timeout,-1);
-    WaitHandles[i] := WaiterThreads[i].Handle;
-  end;
-{
-  Now wait on all waiter threads with no timeout - the timeout is in effect
-  for objects we are waiting on, which the waiter threads are not.
-
-  Result of the entire function is set to the result of this waiting.
-}
-Result := WaitForMultipleHandles_Sys(Addr(WaitHandles[Low(WaitHandles)]),Length(WaitHandles),True,INFINITE,Index,Alertable,MsgWaitOptions,WakeMask);
-Index := -1;  // index from wait function is of no use here
-{
-  We have to process result from waiting on the waiter threads.
-
-  For wrSignaled and wrAbandoned, we traverse all threads and check their
-  results, as it is possible that some (or even all) of them ended with
-  result being other than wrSignaled or wrAbandoned.
-  If we encounter "worse" result than is set by waiting on the waiting threads,
-  then such result will become a new result of this function.
-  If wrError is encountered in any thread, then the traversing will end at that
-  point, result of this function will be set to wrError and Index will be set
-  to Index of that particular waiter thread (which should contain error code).
-
-  wrIOCompletion and wrMessage are taken as they are and nothing is done about
-  then. Note that these results should only be possible in thread that initiated
-  the waiting, as all waiter threads are in non-alertable non-message waiting.
-
-  wrTimeout should not happen, so we are treating it as a critical error.
-
-  wrError indicates something bad has happened, and since the error originates
-  from waiting on waiter threads and not on the original objects, it is again
-  treated as critical error, not as an error to be reported along with error
-  code.
-}
-case Result of
-  wrSignaled,
-  wrAbandoned:    begin
-                    // Check whether all waiter threads ended with result
-                    // being signaled or abandoned.
-                    For i := Low(WaiterThreads) to High(WaiterThreads) do
-                      If WaiterThreads[i].Result > Result then
-                        begin
-                          Result := WaiterThreads[i].Result;
-                          If Result = wrError then
-                            begin
-                              Index := WaiterThreads[i].Index; 
-                              Break{For i};
-                            end;
-                        end;
-                  end;
-  wrIOCompletion: Index := -1;  // do nothing, only possible in an alertable waiting in the initiating thread
-  wrMessage:      Index := -1;  // do nothing, only possible in a message waiting in the initiating thread
-  wrTimeout:      raise EWSOWaitError.Create('WaitForMultipleHandles_HighAll: Wait timeout not allowed here.');
-  wrError:        raise EWSOWaitError.CreateFmt('WaitForMultipleHandles_HighAll: Wait error (%d).',[GetLastError]);
-else
- {some nonsensical result, should not happen}
-  raise EWSOWaitError.CreateFmt('WaitForMultipleHandles_HighAll: Invalid wait result (%d).',[Ord(Result)]);
-end;
-{
-  Some waiter threads might be still waiting. We do not need them anymore and
-  forcefull termination is not a good idea at this point, so we mark them for
-  automatic freeing at their termination and leave them to their fate (all
-  waiter threads, if still present, will be terminated at the program exit).
-
-  If any thread already finished its waiting (in which case its method
-  MarkForAutoFree returns false), then it is freed immediately.
-}
-For i := Low(WaiterThreads) to High(WaiterThreads) do
-  If not WaiterThreads[i].MarkForAutoFree then
-    begin
-      WaiterThreads[i].WaitFor;
-      WaiterThreads[i].Free;
-    end;
-end;
-
-//------------------------------------------------------------------------------
-
-Function WaitForMultipleHandles_HighOne(Handles: PHandle; Count: Integer; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
-var
-  Releaser:       TEvent;
-  WaiterThreads:  array of TWaiterThread;
-  WaitHandles:    array of THandle;
-  i,j,Cntr:       Integer;
-  HandleTemp:     array of THandle;
-begin
-{
-  There is more than MaxWaitObjCount handles to be waited and if any single one
-  of them gets signaled, the waiting will end.
-
-  First handle is expected to be a releaser event.
-
-  We spawn appropriate number of waiter threads and split the handles between
-  them. Each thread will, along with its portion of handles, get a handle to
-  releaser.
-
-  When one of the handles get signaled and waiting in this function ends, the
-  releaser is set to signaled. And since every thread has it among its wait
-  handles, they all end their waiting and exit.
-}
-Releaser := TEvent.DuplicateFrom(Handles^);
-{
-  Create and fill waiter threads, each thread gets a releaser as its first
-  handle.
-}
-SetLength(WaiterThreads,Min(Ceil(Pred(Count) / Pred(MAXIMUM_WAIT_OBJECTS)),MaxWaitObjCount(MsgWaitOptions)));
-SetLength(WaitHandles,Length(WaiterThreads));
-Cntr := 1;  // first handle (the releaser) is skipped
-For i := Low(WaiterThreads) to High(WaiterThreads) do
-  begin
-    If i < High(WaiterThreads) then
-      SetLength(HandleTemp,Min(Succ(Ceil(Pred(Count) / Length(WaiterThreads))),MAXIMUM_WAIT_OBJECTS))
-    else
-      SetLength(HandleTemp,Succ(Count - Cntr));
-    HandleTemp[Low(HandleTemp)] := Releaser.Handle;
-    For j := Succ(Low(HandleTemp)) to High(HandleTemp) do
-      begin
-        HandleTemp[j] := PHandle(PtrUInt(Handles) + PtrUInt(Cntr * SizeOf(THandle)))^;
-        Inc(Cntr);
-      end;
-    //  Threads enter their internal waiting immediately.
-    WaiterThreads[i] := TWaiterThread.Create(HandleTemp,False,Timeout,Cntr - Length(HandleTemp));
-    WaitHandles[i] := WaiterThreads[i].Handle;
-  end;
-// wait on threads, no timeout
-Result := WaitForMultipleHandles_Sys(Addr(WaitHandles[Low(WaitHandles)]),Length(WaitHandles),False,INFINITE,Index,Alertable,MsgWaitOptions,WakeMask);
-{
-  Release all threads and wait until they all exit.
-}
-Releaser.SetEvent;
-For i := Low(WaiterThreads) to High(WaiterThreads) do
-  WaiterThreads[i].WaitFor;
-{
-  Result processing.
-
-  Most results have the same meaning and effect as in wainting on all handles,
-  but wrSignaled and wrAbandoned must be processed to obtain true index of the
-  signaling handle it has in an array passed to this function.
-}
-case Result of
-  wrSignaled,
-  wrAbandoned:    begin
-                    {$message 'rework - store "first" result via interlocked funcs into passed p-variable'}
-                    {
-                      warning - more than one object can be acquired, if an object
-                      is acquired and it is not the first one, it must be released 
-                    }
-                    If (Index >= Low(WaiterThreads)) and (Index <= High(WaiterThreads)) then
-                      begin
-                        Index := -1;
-                        For i := Low(WaiterThreads) to High(WaiterThreads) do
-                          If (WaiterThreads[i].Result in [wrSignaled,wrAbandoned]) and (WaiterThreads[i].Index > 0) then
-                            Index := WaiterThreads[i].IndexOffset + WaiterThreads[i].Index;
-                      end
-                    else raise EWSOWaitError.CreateFmt('WaitForMultipleHandles_HighOne: Invalid index %d.',[Index]);
-                  end;
-  wrIOCompletion: Index := -1;  // do nothing, only possible in an alertable waiting in the initiating thread
-  wrMessage:      Index := -1;  // do nothing, only possible in a message waiting in the initiating thread
-  wrTimeout:      raise EWSOWaitError.Create('WaitForMultipleHandles_HighOne: Wait timeout not allowed here.');
-  wrError:        raise EWSOWaitError.CreateFmt('WaitForMultipleHandles_HighOne: Wait error (%d).',[GetLastError]);
-else
- {some nonsensical result, should not happen}
-  raise EWSOWaitError.CreateFmt('WaitForMultipleHandles_HighOne: Invalid wait result (%d).',[Ord(Result)]);
-end;
-// all waiter threads are now finished, so just free them
-For i := Low(WaiterThreads) to High(WaiterThreads) do
-  WaiterThreads[i].Free;
-{
-  Free releaser. Note that it has duplicated handle, so freeing it will not
-  destroy the original object.
-}
-Releaser.Free;
-end;
-
-//------------------------------------------------------------------------------
-
-Function WaitForMultipleHandles_Thread(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer): TWaitResult;
-begin
-{
-  This function is only called from waiter threads, so no alertable or message
-  waiting is allowed here.
-}
-If Count > MAXIMUM_WAIT_OBJECTS then
-  begin
-    If WaitAll then
-      Result := WaitForMultipleHandles_HighAll(Handles,Count,Timeout,Index,False,[],0)
-    else
-      Result := WaitForMultipleHandles_HighOne(Handles,Count,Timeout,Index,False,[],0);
-  end
-else Result := WaitForMultipleHandles_Sys(Handles,Count,WaitAll,Timeout,Index,False,[],0);
-end;
-
-//------------------------------------------------------------------------------
-
-Function WaitForMultipleHandles_Internal(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
-var
-  Releaser: TEvent;
-  HndTemp:  array of THandle;
-  i:        Integer;
-begin
-Index := -1;
-If Count > 0 then
-  begin
-    If Count > MaxWaitObjCount(MsgWaitOptions) then
-      begin
-        If not WaitAll then
-          begin
-            Releaser := TEvent.Create(nil,True,False,''); // manual reset, nonsignaled
-            try
-              SetLength(HndTemp,Count + 1);
-              For i := 0 to Pred(Count) do 
-                HndTemp[i + 1] := PHandle(PtrUInt(Handles) + PtrUInt(i * SizeOf(THandle)))^;
-              // pass releaser handle
-              HndTemp[0] := Releaser.Handle;
-              Result := WaitForMultipleHandles_HighOne(Addr(HndTemp[Low(HndTemp)]),Length(HndTemp),Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
-              Releaser.SetEvent;
-              If Result in [wrSignaled,wrAbandoned] then
-                Dec(Index);
-            finally
-              Releaser.Free;
-            end;
-          end
-        else Result := WaitForMultipleHandles_HighAll(Handles,Count,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
-      end
-    else Result := WaitForMultipleHandles_Sys(Handles,Count,WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
-  end
-else raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleHandles_Internal: Invalid handle count (%d).',[Count]);
-end;
-
-//------------------------------------------------------------------------------
-
-Function WaitForMultipleObjects_Internal(Objects: array of TWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
-var
-  Releaser: TEvent;
-  HndTemp:  array of THandle;
-  i:        Integer;
-begin
-Index := -1;
-If Length(Objects) > 0 then
-  begin
-    If (Length(Objects) > MaxWaitObjCount(MsgWaitOptions)) and not WaitAll then
-      begin
-        Releaser := TEvent.Create(nil,True,False,'');
-        try
-          SetLength(HndTemp,Length(Objects) + 1);
-          For i := Low(Objects) to High(Objects) do
-            HndTemp[i + 1] := Objects[i].Handle;
-          HndTemp[0] := Releaser.Handle;
-          Result := WaitForMultipleHandles_HighOne(Addr(HndTemp[Low(HndTemp)]),Length(HndTemp),Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
-          Releaser.SetEvent;
-          If Result in [wrSignaled,wrAbandoned] then
-            Dec(Index);
-        finally
-          Releaser.Free;
-        end;
-      end
-    else
-      begin
-        // prepare handle array
-        SetLength(HndTemp,Length(Objects));
-        For i := Low(Objects) to High(Objects) do
-          HndTemp[i] := Objects[i].Handle;
-        // wait on handles
-        If Length(HndTemp) > MaxWaitObjCount(MsgWaitOptions) then
-          Result := WaitForMultipleHandles_HighAll(Addr(HndTemp[Low(HndTemp)]),Length(HndTemp),Timeout,Index,Alertable,MsgWaitOptions,WakeMask)
-        else
-          Result := WaitForMultipleHandles_Sys(Addr(HndTemp[Low(HndTemp)]),Length(HndTemp),WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
-      end;
-  end
-else raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForMultipleObjects_Internal: Invalid object count (%d).',[Length(Objects)]);
-end;
-
-*)
 {===============================================================================
 --------------------------------------------------------------------------------
                                Utility functions
