@@ -263,6 +263,7 @@ type
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset, InitialState: Boolean; const Name: String); overload;
     constructor Create(ManualReset, InitialState: Boolean; const Name: String); overload;
+    constructor Create(ManualReset, InitialState: Boolean); overload;
     constructor Create(const Name: String); overload; // ManualReset := True, InitialState := False
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
@@ -297,6 +298,7 @@ type
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialOwner: Boolean; const Name: String); overload;
     constructor Create(InitialOwner: Boolean; const Name: String); overload;
+    constructor Create(InitialOwner: Boolean); overload;
     constructor Create(const Name: String); overload; // InitialOwner := False
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
@@ -322,6 +324,7 @@ type
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialCount, MaximumCount: Integer; const Name: String); overload;
     constructor Create(InitialCount, MaximumCount: Integer; const Name: String); overload;
+    constructor Create(InitialCount, MaximumCount: Integer); overload;
     constructor Create(const Name: String); overload; // InitialCount := 1, MaximumCount := 1
     constructor Create; overload;
     constructor Open(DesiredAccess: LongWord; InheritHandle: Boolean; const Name: String); overload;
@@ -352,6 +355,7 @@ type
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String); overload;
     constructor Create(ManualReset: Boolean; const Name: String); overload;
+    constructor Create(ManualReset: Boolean); overload;
     constructor Create(const Name: String); overload; // ManualReset := True
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
@@ -903,6 +907,22 @@ Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout
 Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
 
+//------------------------------------------------------------------------------
+{
+  Functions WaitForManyObjects are behaving exactly the same as functions
+  WaitForManyHandles, refer there for details.
+
+  These functions are implemented only for the completeness sake, as using them
+  is not recommended (see description of WaitForManyHandles for why).
+
+    NOTE - LastError property of the passed objects is not set by these
+           functions. Possible error code is returned in Index output parameter.
+}
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -1259,6 +1279,13 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+constructor TEvent.Create(ManualReset, InitialState: Boolean);
+begin
+Create(nil,ManualReset,InitialState,'');
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 constructor TEvent.Create(const Name: String);
 begin
 Create(nil,True,False,Name);
@@ -1358,6 +1385,13 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+constructor TMutex.Create(InitialOwner: Boolean);
+begin
+Create(nil,InitialOwner,'');
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 constructor TMutex.Create(const Name: String);
 begin
 Create(nil,False,Name);
@@ -1433,6 +1467,13 @@ end;
 constructor TSemaphore.Create(InitialCount, MaximumCount: Integer; const Name: String);
 begin
 Create(nil,InitialCount,MaximumCount,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TSemaphore.Create(InitialCount, MaximumCount: Integer);
+begin
+Create(nil,InitialCount,MaximumCount,'');
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -1521,6 +1562,13 @@ end;
 constructor TWaitableTimer.Create(ManualReset: Boolean; const Name: String);
 begin
 Create(nil,ManualReset,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TWaitableTimer.Create(ManualReset: Boolean);
+begin
+Create(nil,ManualReset,'');
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -3158,7 +3206,7 @@ except
 {
   Something really bad happened...
 
-  Set ready event to signalled and signal fatal error.
+  Set ready event to signaled and signal fatal error.
 
   The ready counter might not have been decremented if this exception occured
   before that operation took place. If that is the case, then the ready counter
@@ -3323,6 +3371,11 @@ var
   i,j:            Integer;
   WaitGroupTemp:  TWSOWaitGroup;
 begin
+// clear internals
+CloseHandle(WaitArgs.WaitInternals.ReadyEvent);
+CloseHandle(WaitArgs.WaitInternals.DoneEvent);
+If not WaitArgs.WaitParams.WaitAll then
+  CloseHandle(WaitArgs.WaitInternals.ReleaserEvent);
 // check for fatals in levels, then groups
 For i := Low(WaitArgs.WaitLevels) to High(WaitArgs.WaitLevels) do
   If WaitArgs.WaitLevels[i].WaitResult = wrFatal then
@@ -3423,6 +3476,23 @@ If Count > 0 then
 else raise EWSOMultiWaitInvalidCount.Create('WaitForManyHandles_Internal: Empty handle array.');
 end;
 
+//------------------------------------------------------------------------------
+
+Function WaitForManyObjects_Internal(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
+var
+  Handles:  array of THandle;
+  i:        Integer;
+begin
+If Length(Objects) > 0 then
+  begin
+    SetLength(Handles,Length(Objects));
+    For i := Low(Objects) to High(Objects) do
+      Handles[i] := Objects[i].Handle;
+    Result := WaitForManyHandles_Internal(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
+  end
+else raise EWSOMultiWaitInvalidCount.CreateFmt('WaitForManyObjects_Internal: Invalid object count (%d).',[Length(Objects)]);
+end;
+
 {===============================================================================
     Wait functions (N > MAX) - public functions
 ===============================================================================}
@@ -3499,6 +3569,38 @@ If Length(Handles) > 0 then
   Result := WaitForManyHandles_Internal(Addr(Handles[Low(Handles)]),Length(Handles),WaitAll,INFINITE,Index,False,[],0)
 else
   raise EWSOMultiWaitInvalidCount.Create('WaitForManyHandles: Empty handle array.');
+end;
+
+//------------------------------------------------------------------------------
+
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult;
+begin
+Result := WaitForManyObjects_Internal(Objects,WaitAll,Timeout,Index,Alertable,MsgWaitOptions,WakeMask);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult;
+begin
+Result := WaitForManyObjects_Internal(Objects,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+  
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForManyObjects_Internal(Objects,WaitAll,Timeout,Index,Alertable,[],0);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult;
+var
+  Index:  Integer;
+begin
+Result := WaitForManyObjects_Internal(Objects,WaitAll,INFINITE,Index,False,[],0);
 end;
 
 
