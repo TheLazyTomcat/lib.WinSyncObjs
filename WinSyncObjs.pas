@@ -9,11 +9,37 @@
 
   WinSyncObjs
 
-    Set of classes encapsulating windows synchronization objects.
+    Main aim of this library is to provide classes that are encapsulating
+    synchronization objects provided by the Windows operating system.
+    It currently implements classes for critical section, event, mutex,
+    semaphore and waitable timer.
 
-  Version 1.2 (2021-09-25)
+    Secondary function is to provide other synchronization primitives not
+    available in Windows. At this point, condition variable, barrier and
+    read-write lock are implemented.
+    All can be used for inter-process synchronization. Unfortunately, none can
+    be used in waiting for multiple objects as they are compound or (in-here
+    refered as) complex objects.
 
-  Last change 2021-12-21
+      WARNING - complex synchronization objects are not fully tested and should
+                be therefore considered experimental.
+
+    Another part of this library is encapsulation and extension of functions
+    allowing waiting for multiple objects.
+    The extension (functions WaitForManyHandles and WaitForManyObjects) allows
+    waiting for more than 64 objects, which is a limit for system-provided
+    calls.
+
+      WARNING - waiting for many objects should only be used for waiting on
+                objects with immutable state. Refer to description of these
+                functions for details.
+
+      WARNING - waiting on many objects should also be considered an
+                experimental implementation.
+
+  Version 1.2 (2022-..-..)
+
+  Last change 2022-..-..
 
   ©2016-2022 František Milt
 
@@ -422,7 +448,7 @@ type
 
   TWSOSharedDataLock = record
     case Boolean of
-      True:   (ProcessSharedLock: THandle);
+      True:   (ProcessSharedLock: THandle);   // mutex
       False:  (ThreadSharedLock:  TCriticalSection);
   end;
 
@@ -791,10 +817,10 @@ Function WaitForMultipleHandles(Handles: PHandle; Count: Integer; WaitAll: Boole
   Following functions are behaving the same as the ones accepting pointer to
   handle array, see there for details.
 }
-Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult; overload;
 
 //------------------------------------------------------------------------------
 {
@@ -804,10 +830,10 @@ Function WaitForMultipleHandles(Handles: array of THandle; WaitAll: Boolean): TW
     NOTE - LastError property of the passed objects is not set by these
            functions. Possible error code is returned in Index output parameter.
 }
-Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult; overload;
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -844,7 +870,7 @@ Function WaitForMultipleObjects(Objects: array of TSimpleWinSyncObject; WaitAll:
   of them, were affected beyond the indicated one.
 
   To sum it up, it is highly discouraged to use waiting on many objects with
-  mutable-state. You can safely use it for waiting on threads, processes, and
+  mutable state. You can safely use it for waiting on threads, processes, and
   to some extent on manual-reset events.
 
     NOTE - When calling WaitForManyHandles with number of wait objects (handles)
@@ -902,10 +928,10 @@ Function WaitForManyHandles(Handles: PHandle; Count: Integer; WaitAll: Boolean):
 
 //------------------------------------------------------------------------------
 
-Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean): TWaitResult; overload;
 
 //------------------------------------------------------------------------------
 {
@@ -918,10 +944,10 @@ Function WaitForManyHandles(Handles: array of THandle; WaitAll: Boolean): TWaitR
     NOTE - LastError property of the passed objects is not set by these
            functions. Possible error code is returned in Index output parameter.
 }
-Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
-Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult; overload;{$IFDEF CanInline} inline;{$ENDIF}
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD = QS_ALLINPUT): TWaitResult; overload;
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean; Timeout: DWORD; Alertable: Boolean = False): TWaitResult; overload;
+Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boolean): TWaitResult; overload;
 
 
 {===============================================================================
@@ -944,6 +970,7 @@ uses
 
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
+  {$DEFINE W4055:={$WARN 4055 OFF}} // Conversion between ordinals and pointers is not portable
   {$DEFINE W5057:={$WARN 5057 OFF}} // Local variable "$1" does not seem to be initialized
   {$DEFINE W5058:={$WARN 5058 OFF}} // Variable "$1" does not seem to be initialized
 {$ENDIF}
@@ -1541,6 +1568,15 @@ end;
                                    TWaitableTimer
 --------------------------------------------------------------------------------
 ===============================================================================}
+
+Function wSetWaitableTimer(
+  hTimer:                   THandle;
+  pDueTime:                 PInt64;
+  lPeriod:                  LongInt;
+  pfnCompletionRoutine:     TTimerAPCRoutine; // TTimerAPCRoutine is internally a pointer
+  lpArgToCompletionRoutine: Pointer;
+  fResume:                  BOOL): BOOL; stdcall; external kernel32 name 'SetWaitableTimer';
+
 {===============================================================================
     TWaitableTimer - class implementation
 ===============================================================================}
@@ -1608,7 +1644,7 @@ end;
 {$IFDEF FPCDWM}{$PUSH}W5058{$ENDIF}
 Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
 begin
-Result := Windows.SetWaitableTimer(fHandle,DueTime,Period,@CompletionRoutine,ArgToCompletionRoutine,Resume);
+Result := wSetWaitableTimer(fHandle,@DueTime,Period,CompletionRoutine,ArgToCompletionRoutine,Resume);
 If not Result then
   fLastError := GetLastError;
 end;
@@ -2143,7 +2179,7 @@ end;
 
 procedure TConditionVariable.Wake;
 var
-  Waiters:  UInt32;
+  Waiters:  Int32;
 begin
 LockSharedData;
 try
@@ -2164,7 +2200,7 @@ end;
 
 procedure TConditionVariable.WakeAll;
 var
-  Waiters:  UInt32;
+  Waiters:  Int32;
 begin
 LockSharedData;
 try
@@ -2606,9 +2642,9 @@ end;
 {===============================================================================
     TReadWriteLock - thread-local data
 ===============================================================================}
-threadvar
-  WSO_TLSVAR_RWL_ReadLockCount:   UInt32;   // initialized to 0
-  WSO_TLSVAR_RWL_HoldsWriteLock:  Boolean;  // initialized to false
+//threadvar
+//WSO_TLSVAR_RWL_ReadLockCount:   UInt32;   // initialized to 0
+//WSO_TLSVAR_RWL_HoldsWriteLock:  Boolean;  // initialized to false
 
 {===============================================================================
     TReadWriteLock - class implementation
@@ -2653,6 +2689,15 @@ end;
     Wait functions (N <= MAX) - internal functions
 ===============================================================================}
 
+{
+  There are some inconsistencies in Delphi, so to be sure I am redeclaring the
+  key external fuctions.
+}
+Function MsgWaitForMultipleObjectsEx(nCount: DWORD; pHandles: PHandle; dwMilliseconds: DWORD; dwWakeMask: DWORD; dwFlags: DWORD): DWORD; stdcall; external user32;
+Function WaitForMultipleObjectsEx(nCount: DWORD; lpHandles: PHandle; bWaitAll: BOOL; dwMilliseconds: DWORD; bAlertable: BOOL): DWORD; stdcall; external kernel32;
+
+//------------------------------------------------------------------------------
+
 Function WaitForMultipleHandles_Sys(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
 var
   WaitResult: DWORD;
@@ -2671,10 +2716,10 @@ If (Count > 0) and (Count <= MaxWaitObjCount(MsgWaitOptions)) then
           MsgFlags := MsgFlags or MWMO_ALERTABLE;
         If mwoInputAvailable in MsgWaitOptions then
           MsgFlags := MsgFlags or MWMO_INPUTAVAILABLE;
-        WaitResult := MsgWaitForMultipleObjectsEx(DWORD(Count),{$IFDEF FPC}LPHANDLE{$ELSE}PWOHandleArray{$ENDIF}(Handles),Timeout,WakeMask,MsgFlags);
+        WaitResult := MsgWaitForMultipleObjectsEx(DWORD(Count),Handles,Timeout,WakeMask,MsgFlags);
       end
     // "normal" waiting
-    else WaitResult := WaitForMultipleObjectsEx(DWORD(Count),{$IFDEF FPC}LPHANDLE{$ELSE}PWOHandleArray{$ENDIF}(Handles),WaitAll,Timeout,Alertable);
+    else WaitResult := WaitForMultipleObjectsEx(DWORD(Count),Handles,WaitAll,Timeout,Alertable);
     // process result
     case WaitResult of
       WAIT_OBJECT_0..
@@ -3438,7 +3483,7 @@ If Count > 0 then
         If message waiting is enabled, the first level (index 0) will wait for
         them, other levels and groups can just ignore this setting.
       }
-        FillChar(WaitArgs,SizeOf(TWSOWaitArgs),0);
+        FillChar(Addr(WaitArgs)^,SizeOf(TWSOWaitArgs),0);
         // assign wait parameters
         WaitArgs.WaitParams.WaitAll := WaitAll;
         WaitArgs.WaitParams.Timeout := Timeout;
@@ -3636,11 +3681,13 @@ begin
   some gaps (due to alignment) between items - current implementation assumes
   it doesn't.
 }
+{$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
 If (PtrUInt(Addr(Handles[Succ(Low(Handles))])) - PtrUInt(Addr(Handles[Low(Handles)]))) <> SizeOf(THandle) then
   raise EWSOException.Create('HandleArrayItemsStrideCheck: Unsupported implementation detail (open array items alignment).');
 SetLength(TestArray,2);
 If (PtrUInt(Addr(TestArray[Succ(Low(TestArray))])) - PtrUInt(Addr(TestArray[Low(TestArray)]))) <> SizeOf(THandle) then
   raise EWSOException.Create('HandleArrayItemsStrideCheck: Unsupported implementation detail (array items alignment).');
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
 end;
 
 //------------------------------------------------------------------------------
