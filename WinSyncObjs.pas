@@ -17,9 +17,9 @@
     Secondary function is to provide other synchronization primitives not
     available in Windows. At this point, condition variable, barrier and
     read-write lock are implemented.
-    All can be used for inter-process synchronization. Unfortunately, none can
-    be used in waiting for multiple objects as they are compound or (in-here
-    refered as) complex objects.
+    They can all be used for inter-process synchronization. Unfortunately,
+    none can be used in waiting for multiple objects as they are compound or
+    (in-here refered as) complex objects.
 
       WARNING - complex synchronization objects are not fully tested and should
                 be therefore considered experimental.
@@ -694,19 +694,20 @@ type
 --------------------------------------------------------------------------------
 ===============================================================================}
 {
-  This implementation of read-write lock allows for recursive locking, both for
-  readers and writers, but it does not support read lock promotion - that is,
-  you cannot acquire write lock in the same thread where you are holding a read
-  lock.
+  This implementation of read-write lock does not allow for recursive locking
+  nor read lock promotion - that is, you cannot acquire write lock in the same
+  thread where you are holding a read or write lock.
 
-    WARNING - trying to acquire write lock in a thread that is currently holding
-              a read lock (or vice-versa) will inevitably create a deadlock.
+    WARNING - trying to acquire write lock in a thread that is currently
+              holding read or write lock will create a deadlock.
 }
 type
   TWSORWLockSharedData = packed record
     SharedUserData: TWSOSharedUserData;
     RefCount:       Int32;
-
+    ReadCount:      Int32;
+    WriteWaitCount: Int32;
+    WriteCount:     Int32;
   end;
   PWSORWLockSharedData = ^TWSORWLockSharedData;
 
@@ -716,8 +717,26 @@ type
 type
   TReadWriteLock = class(TComplexWinSyncObject)
   protected
+    fReadLock:          THandle;    // manual-reset event
+    fWriteWaitLock:     THandle;    // manual-reset event
+    fWriteLock:         THandle;    // mutex
+    fRWLockSharedData:  PWSORWLockSharedData;
+    class Function GetSharedDataLockSuffix: String; override;
+    // shared data management methods
+    procedure AllocateSharedData; override;
+    procedure FreeSharedData; override;
+    // locks management methods
+    procedure CreateLocks(SecurityAttributes: PSecurityAttributes); override;
+    procedure OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean); override;
+    procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
+    procedure DestroyLocks; override;
   public
+    procedure ReadLock; virtual;
+    procedure ReadUnlock; virtual;
+    procedure WriteLock; virtual;
+    procedure WriteUnlock; virtual;
   end;
+
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -1711,16 +1730,25 @@ end;
 ===============================================================================}
 const
   WSO_CPLX_SHARED_NAMESPACE = 'wso_shared';
-{$IF SizeOf(TWSOCondSharedData) > SizeOf(TWSOBarrierSharedData)}
-  WSO_CPLX_SHARED_ITEMSIZE  = SizeOf(TWSOCondSharedData);
-{$ELSE}
-  WSO_CPLX_SHARED_ITEMSIZE  = SizeOf(TWSOBarrierSharedData);   
-{$IFEND}
 
   WSO_CPLX_SUFFIX_LENGTH = 8; // all suffixes must have the same length
 
+Function WSO_CPLX_SHARED_ITEMSIZE: Integer; // orignally a constant
+begin
+Result := MaxIntValue([
+  SizeOf(TWSOCondSharedData),
+  SizeOf(TWSOBarrierSharedData),
+  SizeOf(TWSORWLockSharedData)]);
+end;
+
+//------------------------------------------------------------------------------
+
 // because there are incorrect declarations...
-Function SignalObjectAndWait(hObjectToSignal: THandle; hObjectToWaitOn: THandle; dwMilliseconds: DWORD; bAlertable: BOOL): DWORD; stdcall; external kernel32;
+Function SignalObjectAndWait(
+  hObjectToSignal:  THandle;
+  hObjectToWaitOn:  THandle;
+  dwMilliseconds:   DWORD;
+  bAlertable:       BOOL): DWORD; stdcall; external kernel32;
 
 {===============================================================================
     TComplexWinSyncObject - class implementation
@@ -1983,10 +2011,10 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 const
-  WSO_COND_SUFFIX_CONDLOCK  = '@cnd_clk';
-  WSO_COND_SUFFIX_WAITLOCK  = '@cnd_wlk';
-  WSO_COND_SUFFIX_BDONELOCK = '@cnd_blk';
-  WSO_COND_SUFFIX_DATALOCK  = '@cnd_dlk';
+  WSO_COND_SUFFIX_SHAREDDATA = '@cnd_slk';
+  WSO_COND_SUFFIX_WAITLOCK   = '@cnd_wlk';
+  WSO_COND_SUFFIX_BDONELOCK  = '@cnd_blk';
+  WSO_COND_SUFFIX_DATALOCK   = '@cnd_dlk';
 
 {===============================================================================
     TConditionVariable - class implementation
@@ -1997,7 +2025,7 @@ const
 
 class Function TConditionVariable.GetSharedDataLockSuffix: String;
 begin
-Result := WSO_COND_SUFFIX_CONDLOCK;
+Result := WSO_COND_SUFFIX_SHAREDDATA;
 end;
 
 //------------------------------------------------------------------------------
@@ -2381,9 +2409,9 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 const
-  WSO_BARR_SUFFIX_BARRLOCK  = '@brr_blk';
-  WSO_BARR_SUFFIX_RELLOCK   = '@brr_rlk';
-  WSO_BARR_SUFFIX_WAITLOCK  = '@brr_wlk';
+  WSO_BARR_SUFFIX_SHAREDDATA = '@brr_slk';
+  WSO_BARR_SUFFIX_RELLOCK    = '@brr_rlk';
+  WSO_BARR_SUFFIX_WAITLOCK   = '@brr_wlk';
 
 {===============================================================================
     TBarrier - class implementation
@@ -2401,7 +2429,7 @@ end;
 
 class Function TBarrier.GetSharedDataLockSuffix: String;
 begin
-Result := WSO_BARR_SUFFIX_BARRLOCK;
+Result := WSO_BARR_SUFFIX_SHAREDDATA;
 end;
 
 //------------------------------------------------------------------------------
@@ -2503,7 +2531,7 @@ If Count > 0 then
     If fBarrierSharedData^.MaxWaitCount = 0 then
       fBarrierSharedData^.MaxWaitCount := Count;
   end
-else raise EWSOInvalidValue.CreateFmt('TBarrier.Create: Invalid count (%d)',[Count]);
+else raise EWSOInvalidValue.CreateFmt('TBarrier.Create: Invalid count (%d).',[Count]);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2639,17 +2667,172 @@ end;
                                  TReadWriteLock
 --------------------------------------------------------------------------------
 ===============================================================================}
-{===============================================================================
-    TReadWriteLock - thread-local data
-===============================================================================}
-//threadvar
-//WSO_TLSVAR_RWL_ReadLockCount:   UInt32;   // initialized to 0
-//WSO_TLSVAR_RWL_HoldsWriteLock:  Boolean;  // initialized to false
+const
+  WSO_RWLOCK_SUFFIX_SHAREDDATA    = '@rwl_slk';
+  WSO_RWLOCK_SUFFIX_READLOCK      = '@rwl_rlk';
+  WSO_RWLOCK_SUFFIX_WRITEWAITLOCK = '@rwl_alk';
+  WSO_RWLOCK_SUFFIX_WRITELOCK     = '@rwl_wlk';
 
 {===============================================================================
     TReadWriteLock - class implementation
 ===============================================================================}
+{-------------------------------------------------------------------------------
+    TReadWriteLock - protected methods
+-------------------------------------------------------------------------------}
 
+class Function TReadWriteLock.GetSharedDataLockSuffix: String;
+begin
+Result := WSO_RWLOCK_SUFFIX_SHAREDDATA;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.AllocateSharedData;
+begin
+inherited;
+fRWLockSharedData := PWSORWLockSharedData(fSharedData);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.FreeSharedData;
+begin
+fRWLockSharedData := nil;
+inherited;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.CreateLocks(SecurityAttributes: PSecurityAttributes);
+begin
+If fProcessShared then
+  begin
+    CheckAndSetHandle(fReadLock,
+      CreateEventW(SecurityAttributes,True,True,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_READLOCK))));
+    CheckAndSetHandle(fWriteWaitLock,
+      CreateEventW(SecurityAttributes,True,True,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITEWAITLOCK))));
+    CheckAndSetHandle(fWriteLock,
+      CreateMutexW(SecurityAttributes,False,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITELOCK))));
+  end
+else
+  begin
+    CheckAndSetHandle(fReadLock,CreateEventW(SecurityAttributes,True,True,nil));
+    CheckAndSetHandle(fWriteWaitLock,CreateEventW(SecurityAttributes,True,True,nil));
+    CheckAndSetHandle(fWriteLock,CreateMutexW(SecurityAttributes,False,nil));
+  end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean);
+begin
+CheckAndSetHandle(fReadLock,
+  OpenEventW(DesiredAccess or EVENT_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_READLOCK))));
+CheckAndSetHandle(fWriteWaitLock,
+  OpenEventW(DesiredAccess or EVENT_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITEWAITLOCK))));
+CheckAndSetHandle(fWriteLock,
+  OpenMutexW(DesiredAccess or MUTEX_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITELOCK))));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.DuplicateLocks(SourceObject: TComplexWinSyncObject);
+begin
+fRWLockSharedData := PWSORWLockSharedData(fSharedData);
+DuplicateAndSetHandle(fReadLock,TReadWriteLock(SourceObject).fReadLock);
+DuplicateAndSetHandle(fWriteWaitLock,TReadWriteLock(SourceObject).fWriteWaitLock);
+DuplicateAndSetHandle(fWriteLock,TReadWriteLock(SourceObject).fWriteLock);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.DestroyLocks;
+begin
+CloseHandle(fWriteLock);
+CloseHandle(fWriteWaitLock);
+CloseHandle(fReadLock);
+end;
+
+{-------------------------------------------------------------------------------
+    TReadWriteLock - public methods
+-------------------------------------------------------------------------------}
+
+procedure TReadWriteLock.ReadLock;
+var
+  ExitWait: Boolean;
+begin
+repeat
+  If WaitForSingleObject(fReadLock,INFINITE) <> WAIT_OBJECT_0 then
+    raise EWSOWaitError.Create('TReadWriteLock.ReadLock: Failed waiting on read lock.');
+  LockSharedData;
+  try
+    If (fRWLockSharedData^.WriteWaitCount <= 0) and (fRWLockSharedData^.WriteCount <= 0) then
+      begin
+        Inc(fRWLockSharedData^.ReadCount);
+        ResetEvent(fWriteWaitLock);
+        ExitWait := True;
+      end
+    else ExitWait := False;
+  finally
+    UnlockSharedData;
+  end;
+until ExitWait;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.ReadUnlock;
+begin
+LockSharedData;
+try
+  Dec(fRWLockSharedData^.ReadCount);
+  If fRWLockSharedData^.ReadCount <= 0 then
+    SetEvent(fWriteWaitLock);
+finally
+  UnlockSharedData;
+end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.WriteLock;
+begin
+LockSharedData;
+try
+  Inc(fRWLockSharedData^.WriteWaitCount);
+  ResetEvent(fReadLock);
+finally
+  UnlockSharedData;
+end;
+If WaitForSingleObject(fWriteWaitLock,INFINITE) <> WAIT_OBJECT_0 then
+  raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Failed waiting on write-wait lock.');
+If not(WaitForSingleObject(fWriteLock,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED_0]) then
+  raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Failed waiting on write lock.');
+LockSharedData;
+try
+  ResetEvent(fWriteWaitLock);
+  Dec(fRWLockSharedData^.WriteWaitCount);
+  Inc(fRWLockSharedData^.WriteCount);
+finally
+  UnlockSharedData;
+end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.WriteUnlock;
+begin
+LockSharedData;
+try
+  Dec(fRWLockSharedData^.WriteCount);
+  ReleaseMutex(fWriteLock);
+  If fRWLockSharedData^.WriteWaitCount <= 0 then
+    SetEvent(fReadLock);
+  SetEvent(fWriteWaitLock);
+finally
+  UnlockSharedData;
+end;
+end;
 
 
 {===============================================================================
@@ -2684,19 +2867,28 @@ end;
 --------------------------------------------------------------------------------
                             Wait functions (N <= MAX)
 --------------------------------------------------------------------------------
-===============================================================================}
+===============================================================================} 
+{
+  There are some inconsistencies in Delphi, so to be sure I am redeclaring the
+  external fuctions.
+}
+Function MsgWaitForMultipleObjectsEx(
+  nCount:         DWORD;
+  pHandles:       PHandle;
+  dwMilliseconds: DWORD;
+  dwWakeMask:     DWORD;
+  dwFlags:        DWORD): DWORD; stdcall; external user32;
+
+Function WaitForMultipleObjectsEx(
+  nCount:         DWORD;
+  lpHandles:      PHandle;
+  bWaitAll:       BOOL;
+  dwMilliseconds: DWORD;
+  bAlertable:     BOOL): DWORD; stdcall; external kernel32;
+
 {===============================================================================
     Wait functions (N <= MAX) - internal functions
 ===============================================================================}
-
-{
-  There are some inconsistencies in Delphi, so to be sure I am redeclaring the
-  key external fuctions.
-}
-Function MsgWaitForMultipleObjectsEx(nCount: DWORD; pHandles: PHandle; dwMilliseconds: DWORD; dwWakeMask: DWORD; dwFlags: DWORD): DWORD; stdcall; external user32;
-Function WaitForMultipleObjectsEx(nCount: DWORD; lpHandles: PHandle; bWaitAll: BOOL; dwMilliseconds: DWORD; bAlertable: BOOL): DWORD; stdcall; external kernel32;
-
-//------------------------------------------------------------------------------
 
 Function WaitForMultipleHandles_Sys(Handles: PHandle; Count: Integer; WaitAll: Boolean; Timeout: DWORD; out Index: Integer; Alertable: Boolean; MsgWaitOptions: TMessageWaitOptions; WakeMask: DWORD): TWaitResult;
 var
