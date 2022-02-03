@@ -696,7 +696,7 @@ type
 {
   This implementation of read-write lock does not allow for recursive locking
   nor read lock promotion - that is, you cannot acquire write lock in the same
-  thread where you are holding a read or write lock.
+  thread where you are already holding a read or write lock.
 
     WARNING - trying to acquire write lock in a thread that is currently
               holding read or write lock will create a deadlock.
@@ -1982,8 +1982,8 @@ If SourceObject is Self.ClassType then
         }
         If InterlockedIncrement(PWSOCommonSharedData(SourceObject.fSharedData)^.RefCount) > 1 then
           begin
+            SourceObject.fSharedDataLock.ThreadSharedLock.Acquire;
             fSharedDataLock.ThreadSharedLock := SourceObject.fSharedDataLock.ThreadSharedLock;
-            fSharedDataLock.ThreadSharedLock.Acquire;
             fSharedData := SourceObject.fSharedData;
             DuplicateLocks(SourceObject);
           end
@@ -2061,12 +2061,12 @@ If fProcessShared then
     CheckAndSetHandle(fWaitLock,
       CreateSemaphoreW(SecurityAttributes,0,DWORD($7FFFFFFF),PWideChar(StrToWide(fName + WSO_COND_SUFFIX_WAITLOCK))));
     CheckAndSetHandle(fBroadcastDoneLock,
-      CreateEventW(SecurityAttributes,False,False,PWideChar(StrToWide(fName + WSO_COND_SUFFIX_BDONELOCK))));
+      CreateEventW(SecurityAttributes,True,False,PWideChar(StrToWide(fName + WSO_COND_SUFFIX_BDONELOCK))));
   end
 else
   begin
     CheckAndSetHandle(fWaitLock,CreateSemaphoreW(SecurityAttributes,0,DWORD($7FFFFFFF),nil));
-    CheckAndSetHandle(fBroadcastDoneLock,CreateEventW(SecurityAttributes,False,False,nil));
+    CheckAndSetHandle(fBroadcastDoneLock,CreateEventW(SecurityAttributes,True,False,nil));
   end;
 end;
 
@@ -2172,7 +2172,7 @@ repeat
         If fCondSharedData^.WakeCount > 0 then
           begin
             Dec(fCondSharedData^.WakeCount);
-            If (fCondSharedData^.WakeCount <= 0) and fCondSharedData^.Broadcasting then
+            If fCondSharedData^.Broadcasting and (fCondSharedData^.WakeCount <= 0) then
               begin
                 fCondSharedData^.WakeCount := 0;
                 fCondSharedData^.Broadcasting := False;
@@ -2206,22 +2206,18 @@ end;
 //------------------------------------------------------------------------------
 
 procedure TConditionVariable.Wake;
-var
-  Waiters:  Int32;
 begin
 LockSharedData;
 try
-  Waiters := fCondSharedData^.WaitCount;
-  If Waiters > 0 then
+  If fCondSharedData^.WaitCount > 0 then
     begin
       Dec(fCondSharedData^.WaitCount);
       Inc(fCondSharedData^.WakeCount);
+      ReleaseSemaphore(fWaitLock,1,nil);
     end;
 finally
   UnlockSharedData;
 end;
-If Waiters > 0 then
-  ReleaseSemaphore(fWaitLock,1,nil);
 end;
 
 //------------------------------------------------------------------------------
@@ -2235,19 +2231,19 @@ try
   Waiters := fCondSharedData^.WaitCount;
   If Waiters > 0 then
     begin
-      Dec(fCondSharedData^.WaitCount,Waiters);
+      fCondSharedData^.WaitCount := 0;
       Inc(fCondSharedData^.WakeCount,Waiters);
+      If not fCondSharedData^.Broadcasting then
+        ResetEvent(fBroadcastDoneLock);
       fCondSharedData^.Broadcasting := True;
+      ReleaseSemaphore(fWaitLock,Waiters,nil);
     end;
 finally
   UnlockSharedData;
 end;  
 If Waiters > 0 then
-  begin
-    ReleaseSemaphore(fWaitLock,Waiters,nil);
-    If WaitForSingleObject(fBroadcastDoneLock,INFINITE) <> WAIT_OBJECT_0 then
-      raise EWSOWaitError.Create('TConditionVariable.WakeAll: Wait for broadcast failed.');
-  end;
+  If WaitForSingleObject(fBroadcastDoneLock,INFINITE) <> WAIT_OBJECT_0 then
+    raise EWSOWaitError.Create('TConditionVariable.WakeAll: Wait for broadcast failed.');
 end;
 
 //------------------------------------------------------------------------------
