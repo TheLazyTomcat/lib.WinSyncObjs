@@ -121,19 +121,26 @@ uses
 type
   EWSOException = class(Exception);
 
-  EWSOInvalidHandle          = class(EWSOException);
-  EWSOHandleDuplicationError = class(EWSOException);
-  EWSOInvalidObject          = class(EWSOException);
   EWSOOpenError              = class(EWSOException);
-  EWSOTimeConversionError    = class(EWSOException);
+  EWSOHandleDuplicationError = class(EWSOException);
 
-  EWSOWaitError              = class(EWSOException);
+  EWSOInvalidHandle          = class(EWSOException);
+  EWSOInvalidObject          = class(EWSOException);
   EWSOUnsupportedObject      = class(EWSOException);
+
+  EWSOInitializationError    = class(EWSOException);
+  EWSOWaitError              = class(EWSOException);
   EWSOAutoCycleError         = class(EWSOException);
-  EWSOInvalidValue           = class(EWSOException);
+
+  EWSOEventError     = class(EWSOException);
+  EWSOMutexError     = class(EWSOException);
+  EWSOSemaphoreError = class(EWSOException);
+  EWSOTimerError     = class(EWSOException);
 
   EWSOMultiWaitInvalidCount  = class(EWSOException);
   EWSOMultiWaitError         = class(EWSOException);
+
+  EWSOTimeConversionError    = class(EWSOException);  
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -166,10 +173,10 @@ type
     constructor Create; overload;
     constructor Create(SpinCount: DWORD); overload;
     destructor Destroy; override;
-    Function SetSpinCount(SpinCount: DWORD): DWORD;
-    Function TryEnter: Boolean;
-    procedure Enter;
-    procedure Leave;
+    Function SetSpinCount(SpinCount: DWORD): DWORD; virtual;
+    Function TryEnter: Boolean; virtual;
+    procedure Enter; virtual;
+    procedure Leave; virtual;
   {
     If you are setting SpinCount in multiple threads, then the property might
     not necessarily contain the correct value set for the underlying system
@@ -295,13 +302,16 @@ type
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
     Function WaitForAndReset(Timeout: DWORD = INFINITE; Alertable: Boolean = False): TWaitResult;
-    Function SetEvent: Boolean;
-    Function ResetEvent: Boolean;
+    procedure SetEvent; virtual;
+    procedure ResetEvent; virtual;
   {
     Function PulseEvent is unreliable and should not be used. More info here:
     https://msdn.microsoft.com/en-us/library/windows/desktop/ms684914
   }
-    Function PulseEvent: Boolean; deprecated {$IFDEF DeprecatedComment}'Unreliable, do not use.'{$ENDIF};
+    procedure PulseEvent; virtual; deprecated {$IFDEF DeprecatedComment}'Unreliable, do not use.'{$ENDIF};
+    Function SetEventSilent: Boolean; virtual;
+    Function ResetEventSilent: Boolean; virtual;
+    Function PulseEventSilent: Boolean; virtual; deprecated {$IFDEF DeprecatedComment}'Unreliable, do not use.'{$ENDIF};
   end;
 
 {===============================================================================
@@ -329,8 +339,9 @@ type
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
-    Function WaitForAndRelease(TimeOut: DWORD = INFINITE; Alertable: Boolean = False): TWaitResult;
-    Function ReleaseMutex: Boolean;
+    Function WaitForAndRelease(TimeOut: DWORD = INFINITE; Alertable: Boolean = False): TWaitResult; virtual;
+    procedure ReleaseMutex; virtual;
+    Function ReleaseMutexSilent: Boolean; virtual;
   end;
 
 {===============================================================================
@@ -355,9 +366,11 @@ type
     constructor Create; overload;
     constructor Open(DesiredAccess: LongWord; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String); overload;
-    Function WaitForAndRelease(TimeOut: LongWord = INFINITE; Alertable: Boolean = False): TWaitResult;
-    Function ReleaseSemaphore(ReleaseCount: Integer; out PreviousCount: Integer): Boolean; overload;
-    Function ReleaseSemaphore: Boolean; overload;
+    Function WaitForAndRelease(TimeOut: LongWord = INFINITE; Alertable: Boolean = False): TWaitResult; virtual;
+    procedure ReleaseSemaphore(ReleaseCount: Integer; out PreviousCount: Integer); overload; virtual;
+    procedure ReleaseSemaphore; overload; virtual;
+    Function ReleaseSemaphoreSilent(ReleaseCount: Integer; out PreviousCount: Integer): Boolean; overload; virtual;
+    Function ReleaseSemaphoreSilent: Boolean; overload; virtual;
   end;
 
 {===============================================================================
@@ -378,6 +391,8 @@ type
   PTimerAPCRoutine = ^TTimerAPCRoutine;
 
   TWaitableTimer = class(TSimpleWinSyncObject)
+  protected
+    Function DateTimeToFileTime(DateTime: TDateTime): TFileTime; virtual;
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String); overload;
     constructor Create(ManualReset: Boolean; const Name: String); overload;
@@ -386,11 +401,16 @@ type
     constructor Create; overload;
     constructor Open(DesiredAccess: DWORD; InheritHandle: Boolean; const Name: String); overload;
     constructor Open(const Name: String{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload;
-    Function SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload;
-    Function SetWaitableTimer(DueTime: Int64; Period: Integer = 0): Boolean; overload;
-    Function SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload;
-    Function SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0): Boolean; overload;
-    Function CancelWaitableTimer: Boolean;
+    procedure SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean); overload; virtual;
+    procedure SetWaitableTimer(DueTime: Int64; Period: Integer = 0); overload; virtual;
+    procedure SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean); overload; virtual;
+    procedure SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0); overload; virtual;
+    procedure CancelWaitableTimer; virtual;
+    Function SetWaitableTimerSilent(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload; virtual;
+    Function SetWaitableTimerSilent(DueTime: Int64; Period: Integer = 0): Boolean; overload; virtual;
+    Function SetWaitableTimerSilent(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean; overload; virtual;
+    Function SetWaitableTimerSilent(DueTime: TDateTime; Period: Integer = 0): Boolean; overload; virtual;
+    Function CancelWaitableTimerSilent: Boolean; virtual; 
   end;
 
 {===============================================================================
@@ -553,7 +573,7 @@ type
   TConditionVariable = class(TComplexWinSyncObject)
   protected
     fWaitLock:                  THandle;              // semaphore
-    fBroadcastDoneLock:         THandle;              // autoreset event
+    fBroadcastDoneLock:         THandle;              // manual-reset event
     fCondSharedData:            PWSOCondSharedData;
     // autocycle events
     fOnPredicateCheckEvent:     TWSOPredicateCheckEvent;
@@ -645,11 +665,12 @@ type
 ===============================================================================}
 type
   TWSOBarrierSharedData = packed record
-    SharedUserData: TWSOSharedUserData;
-    RefCount:       Int32;
-    MaxWaitCount:   Int32;  // invariant value, set only once
-    WaitCount:      Int32;
-    Releasing:      Boolean;
+    SharedUserData:   TWSOSharedUserData;
+    RefCount:         Int32;
+    MaxWaitCount:     Int32;    // invariant value, set only once
+    WaitCount:        Int32;
+    MaxWaitCountSet:  Boolean;  // invariant value, set only once  
+    Releasing:        Boolean;
   end;
   PWSOBarrierSharedData = ^TWSOBarrierSharedData;
 
@@ -1055,7 +1076,9 @@ constructor TCriticalSection.Create(SpinCount: DWORD);
 begin
 inherited Create;
 fSpinCount := SpinCount;
-InitializeCriticalSectionAndSpinCount(fCriticalSectionObj,SpinCount);
+If not InitializeCriticalSectionAndSpinCount(fCriticalSectionObj,SpinCount) then
+  raise EWSOInitializationError.CreateFmt('TCriticalSection.Create:' +
+    ' Failed to initialize critical section with spin count (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1160,7 +1183,7 @@ begin
 If Handle <> 0 then
   fHandle := Handle
 else
-  raise EWSOInvalidHandle.CreateFmt('TSimpleWinSyncObject.CheckAndSetHandle: Null handle (0x%.8x).',[GetLastError]);
+  raise EWSOInvalidHandle.CreateFmt('TSimpleWinSyncObject.CheckAndSetHandle: Null handle (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1173,7 +1196,7 @@ If DuplicateHandle(SourceProcess,SourceHandle,GetCurrentProcess,@NewHandle,0,Fal
   CheckAndSetHandle(NewHandle)
 else
   raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateAndSetHandleFrom: ' +
-                                             'Handle duplication failed (0x%.8x).',[GetLastError]);
+                                             'Handle duplication failed (%d).',[GetLastError]);
 end;
 
 {-------------------------------------------------------------------------------
@@ -1230,7 +1253,7 @@ If SourceProcess <> 0 then
     CloseHandle(SourceProcess);
   end
 else raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateFromProcessID: ' +
-                                                'Failed to open source process (0x%.8x).',[GetLastError]);
+                                                'Failed to open source process (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1247,7 +1270,7 @@ Function TSimpleWinSyncObject.DuplicateForProcess(TargetProcess: THandle): THand
 begin
 If not DuplicateHandle(GetCurrentProcess,fHandle,TargetProcess,@Result,0,False,DUPLICATE_SAME_ACCESS) then
   raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateForProcess: ' +
-                                             'Handle duplication failed (0x%.8x).',[GetLastError]);
+                                             'Handle duplication failed (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1264,7 +1287,7 @@ If TargetProcess <> 0 then
     CloseHandle(TargetProcess);
   end
 else raise EWSOHandleDuplicationError.CreateFmt('TSimpleWinSyncObject.DuplicateForProcessID: ' +
-                                                'Failed to open target process (0x%.8x).',[GetLastError]);
+                                                'Failed to open target process (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1373,7 +1396,33 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TEvent.SetEvent: Boolean;
+procedure TEvent.SetEvent;
+begin
+If not Windows.SetEvent(fHandle) then
+  raise EWSOEventError.CreateFmt('TEvent.SetEvent: Failed to set event (%d).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TEvent.ResetEvent;
+begin
+If not Windows.ResetEvent(fHandle) then
+  raise EWSOEventError.CreateFmt('TEvent.ResetEvent: Failed to reset event (%d).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
+
+{$WARN SYMBOL_DEPRECATED OFF}
+procedure TEvent.PulseEvent;
+{$WARN SYMBOL_DEPRECATED ON}
+begin
+If not Windows.PulseEvent(fHandle) then
+  raise EWSOEventError.CreateFmt('TEvent.PulseEvent: Failed to pulse event (%d).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TEvent.SetEventSilent: Boolean;
 begin
 Result := Windows.SetEvent(fHandle);
 If not Result then
@@ -1382,7 +1431,7 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TEvent.ResetEvent: Boolean;
+Function TEvent.ResetEventSilent: Boolean;
 begin
 Result := Windows.ResetEvent(fHandle);
 If not Result then
@@ -1392,7 +1441,7 @@ end;
 //------------------------------------------------------------------------------
 
 {$WARN SYMBOL_DEPRECATED OFF}
-Function TEvent.PulseEvent: Boolean;
+Function TEvent.PulseEventSilent: Boolean;
 {$WARN SYMBOL_DEPRECATED ON}
 begin
 Result := Windows.PulseEvent(fHandle);
@@ -1479,7 +1528,15 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TMutex.ReleaseMutex: Boolean;
+procedure TMutex.ReleaseMutex;
+begin
+If not Windows.ReleaseMutex(fHandle) then
+  raise EWSOMutexError.CreateFmt('TMutex.ReleaseMutex: Failed to release mutex (%d).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TMutex.ReleaseMutexSilent: Boolean;
 begin
 Result := Windows.ReleaseMutex(fHandle);
 If not Result then
@@ -1559,13 +1616,30 @@ end;
 Function TSemaphore.WaitForAndRelease(TimeOut: LongWord = INFINITE; Alertable: Boolean = False): TWaitResult;
 begin
 Result := WaitFor(Timeout,Alertable);
-If Result in [wrSignaled,wrAbandoned] then
+If Result = wrSignaled then
   ReleaseSemaphore;
 end;
 
 //------------------------------------------------------------------------------
 
-Function TSemaphore.ReleaseSemaphore(ReleaseCount: Integer; out PreviousCount: Integer): Boolean;
+procedure TSemaphore.ReleaseSemaphore(ReleaseCount: Integer; out PreviousCount: Integer);
+begin
+If not Windows.ReleaseSemaphore(fHandle,ReleaseCount,@PreviousCount) then
+  raise EWSOSemaphoreError.CreateFmt('TSemaphore.ReleaseSemaphore: Failed to release semaphore (%d).',[GetLastError]);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TSemaphore.ReleaseSemaphore;
+var
+  Dummy:  Integer;
+begin
+ReleaseSemaphore(1,Dummy);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TSemaphore.ReleaseSemaphoreSilent(ReleaseCount: Integer; out PreviousCount: Integer): Boolean;
 begin
 Result := Windows.ReleaseSemaphore(fHandle,ReleaseCount,@PreviousCount);
 If not Result then
@@ -1574,11 +1648,11 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-Function TSemaphore.ReleaseSemaphore: Boolean;
+Function TSemaphore.ReleaseSemaphoreSilent: Boolean;
 var
   Dummy:  Integer;
 begin
-Result := ReleaseSemaphore(1,Dummy);
+Result := ReleaseSemaphoreSilent(1,Dummy);
 end;
 
 
@@ -1588,7 +1662,7 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 
-Function wSetWaitableTimer(
+Function WinSetWaitableTimer(
   hTimer:                   THandle;
   pDueTime:                 PInt64;
   lPeriod:                  LongInt;
@@ -1599,6 +1673,28 @@ Function wSetWaitableTimer(
 {===============================================================================
     TWaitableTimer - class implementation
 ===============================================================================}
+{-------------------------------------------------------------------------------
+    TWaitableTimer - protected methods
+-------------------------------------------------------------------------------}
+
+Function TWaitableTimer.DateTimeToFileTime(DateTime: TDateTime): TFileTime;
+var
+  LocalTime:  TFileTime;
+  SystemTime: TSystemTime;
+begin
+Result.dwLowDateTime := 0;
+Result.dwHighDateTime := 0;
+DateTimeToSystemTime(DateTime,SystemTime);
+If SystemTimeToFileTime(SystemTime,LocalTime) then
+  begin
+    If not LocalFileTimeToFileTime(LocalTime,Result) then
+      raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.DateTimeToFileTime: ' +
+                                              'LocalFileTimeToFileTime failed (%d).',[GetLastError]);
+  end
+else raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.DateTimeToFileTime: ' +
+                                             'SystemTimeToFileTime failed (%d).',[GetLastError]);
+end;
+
 {-------------------------------------------------------------------------------
     TWaitableTimer - public methods
 -------------------------------------------------------------------------------}
@@ -1660,62 +1756,82 @@ end;
 
 //------------------------------------------------------------------------------
 
-{$IFDEF FPCDWM}{$PUSH}W5058{$ENDIF}
-Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
+//{$IFDEF FPCDWM}{$PUSH}W5058{$ENDIF}
+procedure TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean);
 begin
-Result := wSetWaitableTimer(fHandle,@DueTime,Period,CompletionRoutine,ArgToCompletionRoutine,Resume);
-If not Result then
-  fLastError := GetLastError;
+If not WinSetWaitableTimer(fHandle,@DueTime,Period,CompletionRoutine,ArgToCompletionRoutine,Resume) then
+  raise EWSOTimerError.CreateFmt('TWaitableTimer.SetWaitableTimer: Failed to set timer (%d).',[GetLastError]);
 end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
+//{$IFDEF FPCDWM}{$POP}{$ENDIF}
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-Function TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer = 0): Boolean;
+procedure TWaitableTimer.SetWaitableTimer(DueTime: Int64; Period: Integer = 0);
 begin
-Result := SetWaitableTimer(DueTime,Period,nil,nil,False);
+SetWaitableTimer(DueTime,Period,nil,nil,False);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-{$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
-Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
-
-  Function DateTimeToFileTime(DateTime: TDateTime): TFileTime;
-  var
-    LocalTime:  TFileTime;
-    SystemTime: TSystemTime;
-  begin
-    Result.dwLowDateTime := 0;
-    Result.dwHighDateTime := 0;
-    DateTimeToSystemTime(DateTime,SystemTime);
-    If SystemTimeToFileTime(SystemTime,LocalTime) then
-      begin
-        If not LocalFileTimeToFileTime(LocalTime,Result) then
-          raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.SetWaitableTimer.DateTimeToFileTime: ' +
-                                                  'LocalFileTimeToFileTime failed (0x%.8x).',[GetLastError]);
-      end
-    else raise EWSOTimeConversionError.CreateFmt('TWaitableTimer.SetWaitableTimer.DateTimeToFileTime: ' +
-                                                 'SystemTimeToFileTime failed (0x%.8x).',[GetLastError]);
-  end;
-
+//{$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
+procedure TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean);
 begin
-Result := SetWaitableTimer(Int64(DateTimeToFileTime(DueTime)),Period,CompletionRoutine,ArgToCompletionRoutine,Resume);
-If not Result then
-  fLastError := GetLastError;
+SetWaitableTimer(Int64(DateTimeToFileTime(DueTime)),Period,CompletionRoutine,ArgToCompletionRoutine,Resume);
 end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
+//{$IFDEF FPCDWM}{$POP}{$ENDIF}
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-Function TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0): Boolean;
+procedure TWaitableTimer.SetWaitableTimer(DueTime: TDateTime; Period: Integer = 0);
 begin
-Result := SetWaitableTimer(DueTime,Period,nil,nil,False);
+SetWaitableTimer(DueTime,Period,nil,nil,False);
 end;
 
 //------------------------------------------------------------------------------
 
-Function TWaitableTimer.CancelWaitableTimer: Boolean;
+procedure TWaitableTimer.CancelWaitableTimer;
+begin
+If not Windows.CancelWaitableTimer(fHandle) then
+  raise EWSOTimerError.CreateFmt('TWaitableTimer.CancelWaitableTimer: Failed to cancel timer (%d).',[GetLastError]);
+end;
+
+//------------------------------------------------------------------------------
+
+//{$IFDEF FPCDWM}{$PUSH}W5058{$ENDIF}
+Function TWaitableTimer.SetWaitableTimerSilent(DueTime: Int64; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
+begin
+Result := WinSetWaitableTimer(fHandle,@DueTime,Period,CompletionRoutine,ArgToCompletionRoutine,Resume);
+If not Result then
+  fLastError := GetLastError;
+end;
+//{$IFDEF FPCDWM}{$POP}{$ENDIF}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function TWaitableTimer.SetWaitableTimerSilent(DueTime: Int64; Period: Integer = 0): Boolean;
+begin
+Result := SetWaitableTimerSilent(DueTime,Period,nil,nil,False);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+//{$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
+Function TWaitableTimer.SetWaitableTimerSilent(DueTime: TDateTime; Period: Integer; CompletionRoutine: TTimerAPCRoutine; ArgToCompletionRoutine: Pointer; Resume: Boolean): Boolean;
+begin
+Result := SetWaitableTimerSilent(Int64(DateTimeToFileTime(DueTime)),Period,CompletionRoutine,ArgToCompletionRoutine,Resume);
+end;
+//{$IFDEF FPCDWM}{$POP}{$ENDIF}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+Function TWaitableTimer.SetWaitableTimerSilent(DueTime: TDateTime; Period: Integer = 0): Boolean;
+begin
+Result := SetWaitableTimerSilent(DueTime,Period,nil,nil,False);
+end;
+
+//------------------------------------------------------------------------------
+
+Function TWaitableTimer.CancelWaitableTimerSilent: Boolean;
 begin
 Result := Windows.CancelWaitableTimer(fHandle);
 If not Result then
@@ -1780,11 +1896,11 @@ end;
 
 Function TComplexWinSyncObject.RectifyAndSetName(const Name: String): Boolean;
 begin
-inherited RectifyAndSetName(Name);  // should be always true
+inherited RectifyAndSetName(Name);  // should always return true
 If (Length(fName) + WSO_CPLX_SUFFIX_LENGTH) > UNICODE_STRING_MAX_CHARS then
   SetLength(fName,UNICODE_STRING_MAX_CHARS - WSO_CPLX_SUFFIX_LENGTH);
-Result := Length(fName) > 0;
-fProcessShared := Result;
+fProcessShared := Length(fName) > 0;
+Result := fProcessShared;
 end;
 
 //------------------------------------------------------------------------------
@@ -1794,7 +1910,7 @@ begin
 If Handle <> 0 then
   Destination := Handle
 else
-  raise EWSOInvalidHandle.CreateFmt('TComplexWinSyncObject.CheckAndSetHandle: Null handle (0x%.8x).',[GetLastError]);
+  raise EWSOInvalidHandle.CreateFmt('TComplexWinSyncObject.CheckAndSetHandle: Null handle (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1807,7 +1923,7 @@ If DuplicateHandle(GetCurrentProcess,Handle,GetCurrentProcess,@NewHandle,0,False
   CheckAndSetHandle(Destination,NewHandle)
 else
   raise EWSOHandleDuplicationError.CreateFmt('TComplexWinSyncObject.DuplicateAndSetHandle: ' +
-                                             'Handle duplication failed (0x%.8x).',[GetLastError]);
+                                             'Handle duplication failed (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1865,7 +1981,7 @@ begin
 If fProcessShared then
   begin
     If not ReleaseMutex(fSharedDataLock.ProcessSharedLock) then
-      raise EWSOWaitError.CreateFmt('TComplexWinSyncObject.UnlockSharedData: Lock not released, cannot proceed (0x%.8x).',[GetLastError]);
+      raise EWSOWaitError.CreateFmt('TComplexWinSyncObject.UnlockSharedData: Lock not released, cannot proceed (%d).',[GetLastError]);
   end
 else fSharedDataLock.ThreadSharedLock.Leave;
 end;
@@ -1913,20 +2029,11 @@ end;
 constructor TComplexWinSyncObject.Create(SecurityAttributes: PSecurityAttributes; const Name: String);
 begin
 inherited Create;
-If RectifyAndSetName(Name) then
-  begin
-    // process-shared...
-    CreateSharedDataLock(SecurityAttributes);
-    AllocateSharedData;
-    CreateLocks(SecurityAttributes);
-  end
-else
-  begin
-    // thread-shared...
-    CreateSharedDataLock(SecurityAttributes);
-    AllocateSharedData;
-    CreateLocks(SecurityAttributes);
-  end;
+RectifyAndSetName(Name);
+// following is the same for process-shared and thread-shared
+CreateSharedDataLock(SecurityAttributes);
+AllocateSharedData;
+CreateLocks(SecurityAttributes);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2149,7 +2256,7 @@ procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE;
     // note that we are waiting on semaphore, so abandoned is not a good result  
     Result := WaitResult = WAIT_OBJECT_0{signaled};
     If WaitResult = WAIT_FAILED then
-      raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep.InternalWait: Sleep failed (0x%.8x)',[GetLastError]);
+      raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep.InternalWait: Sleep failed (%d)',[GetLastError]);
   end;
 
 var
@@ -2176,7 +2283,8 @@ repeat
               begin
                 fCondSharedData^.WakeCount := 0;
                 fCondSharedData^.Broadcasting := False;
-                SetEvent(fBroadcastDoneLock);
+                If not SetEvent(fBroadcastDoneLock) then
+                  raise EWSOEventError.CreateFmt('TConditionVariable.Sleep: Failed to set BDL event (%d).',[GetLastError]);
               end;
             ExitWait := True; // normal wakeup               
           end;
@@ -2213,7 +2321,8 @@ try
     begin
       Dec(fCondSharedData^.WaitCount);
       Inc(fCondSharedData^.WakeCount);
-      ReleaseSemaphore(fWaitLock,1,nil);
+      If not ReleaseSemaphore(fWaitLock,1,nil) then
+        raise EWSOSemaphoreError.CreateFmt('TConditionVariable.Wake: Failed to release WL semaphore (%d).',[GetLastError]);
     end;
 finally
   UnlockSharedData;
@@ -2234,9 +2343,11 @@ try
       fCondSharedData^.WaitCount := 0;
       Inc(fCondSharedData^.WakeCount,Waiters);
       If not fCondSharedData^.Broadcasting then
-        ResetEvent(fBroadcastDoneLock);
+        If not ResetEvent(fBroadcastDoneLock) then
+          raise EWSOEventError.CreateFmt('TConditionVariable.WakeAll: Failed to reset BDL event (%d).',[GetLastError]);
       fCondSharedData^.Broadcasting := True;
-      ReleaseSemaphore(fWaitLock,Waiters,nil);
+      If not ReleaseSemaphore(fWaitLock,Waiters,nil) then
+        raise EWSOSemaphoreError.CreateFmt('TConditionVariable.WakeAll: Failed to release WL semaphore (%d).',[GetLastError]);
     end;
 finally
   UnlockSharedData;
@@ -2267,7 +2378,7 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckEvent) then
           SelectWake(WakeOptions);
         // unlock synchronizer
         If not ReleaseMutex(DataLock) then
-          raise EWSOAutoCycleError.CreateFmt('TConditionVariable.AutoCycle: Failed to unlock data synchronizer (0x%.8x).',[GetLastError]);
+          raise EWSOAutoCycleError.CreateFmt('TConditionVariable.AutoCycle: Failed to unlock data synchronizer (%d).',[GetLastError]);
         // wake waiters after unlock
         If not(woWakeBeforeUnlock in WakeOptions) then
           SelectWake(WakeOptions);
@@ -2300,14 +2411,14 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
               SelectWake(WakeOptions);
             // unlock synchronizer
             If DataLock is TEvent then
-              ReleaseResult := TEvent(DataLock).SetEvent
+              ReleaseResult := TEvent(DataLock).SetEventSilent
             else If DataLock is TMutex then
-              ReleaseResult := TMutex(DataLock).ReleaseMutex
+              ReleaseResult := TMutex(DataLock).ReleaseMutexSilent
             else
-              ReleaseResult := TSemaphore(DataLock).ReleaseSemaphore;
+              ReleaseResult := TSemaphore(DataLock).ReleaseSemaphoreSilent;
             If not ReleaseResult then
               raise EWSOAutoCycleError.CreateFmt('TConditionVariable.AutoCycle: ' +
-                                                 'Failed to unlock data synchronizer (0x%.8x).',[DataLock.LastError]);
+                                                 'Failed to unlock data synchronizer (%d).',[DataLock.LastError]);
             // wake waiters after unlock
             If not(woWakeBeforeUnlock in WakeOptions) then
               SelectWake(WakeOptions);
@@ -2381,7 +2492,7 @@ end;
 procedure TConditionVariableEx.Unlock;
 begin
 If not ReleaseMutex(fDataLock) then
-  raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to unlock data synchronizer (0x%.8x).',[GetLastError]);
+  raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to unlock data synchronizer (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -2496,24 +2607,24 @@ end;
 constructor TBarrier.Create(SecurityAttributes: PSecurityAttributes; const Name: String);
 begin
 {
-  Barrier with count of 1 is seriously pointless, but if you call a constructor
+  Barrier with count of 0 is seriously pointless, but if you call a constructor
   without specifying the count, what do you expect to happen?!
 }
-Create(SecurityAttributes,1,Name);
+Create(SecurityAttributes,0,Name);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TBarrier.Create(const Name: String);
 begin
-Create(nil,1,Name);
+Create(nil,0,Name);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 constructor TBarrier.Create;
 begin
-Create(nil,1,'');
+Create(nil,0,'');
 end;
 
 
@@ -2522,12 +2633,16 @@ end;
 constructor TBarrier.Create(SecurityAttributes: PSecurityAttributes; Count: Integer; const Name: String);
 begin
 inherited Create(SecurityAttributes,Name);
-If Count > 0 then
-  begin
-    If fBarrierSharedData^.MaxWaitCount = 0 then
+LockSharedData;
+try
+  If not fBarrierSharedData^.MaxWaitCountSet then
+    begin
+      fBarrierSharedData^.MaxWaitCountSet := True;
       fBarrierSharedData^.MaxWaitCount := Count;
-  end
-else raise EWSOInvalidValue.CreateFmt('TBarrier.Create: Invalid count (%d).',[Count]);
+    end;
+finally
+  UnlockSharedData;
+end;
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -2548,85 +2663,107 @@ end;
 
 Function TBarrier.Wait: Boolean;
 var
-  ExitWait: Boolean;
+  MaxWaitCount: Int32;
+  ExitWait:     Boolean;
 begin
-Result := False;
-repeat
-  LockSharedData;
-  If fBarrierSharedData^.Releasing then
-    begin
-    {
-      Releasing is in progress, so this thread cannot queue on the barrier.
-      Unlock shared data and wait for fReleaseLock to become signaled, which
-      happens at the end of releasing.
-    }
-      UnlockSharedData;
-      If WaitForSingleObject(fReleaseLock,INFINITE) <> WAIT_OBJECT_0 then
-        raise EWSOWaitError.Create('TBarrier.Wait: Failed waiting on release lock.');
-      ExitWait := False;
-      // Releasing should be done by this point. Re-enter waiting.
-    end
-  else
-    begin
-      // Releasing is currently not running.
-      Inc(fBarrierSharedData^.WaitCount);
-      If fBarrierSharedData^.WaitCount >= fBarrierSharedData^.MaxWaitCount then
+{
+  If MaxWaitCount is 1 or less, then just ignore everything and immediately
+  return.
+}
+LockSharedData;
+try
+  MaxWaitCount := fBarrierSharedData^.MaxWaitCount;
+finally
+  UnlockSharedData;
+end;
+If MaxWaitCount > 1 then
+  begin
+    Result := False;
+    repeat
+      LockSharedData;
+      If fBarrierSharedData^.Releasing then
         begin
         {
-          Maximum number of waiting threads for this barrier has been reached.
-
-          First prevent other threads from queueing on this barrier by
-          resetting fReleaseLock and indicating the fact in shared data.
+          Releasing is in progress, so this thread cannot queue on the barrier.
+          Unlock shared data and wait for fReleaseLock to become signaled,
+          which happens at the end of releasing.
         }
-          ResetEvent(fReleaseLock);
-          fBarrierSharedData^.Releasing := True;
-          Dec(fBarrierSharedData^.WaitCount); // remove self from waiting count
-        {
-          Now unlock shared data and release all waiting threads from
-          fWaitLock.
-
-          Unlocking shared data at this point is secure because any thread that
-          will acquire them will encounter Releasing field to be true and will
-          therefore enter waiting on fReleaseLock, which is now non-signaled.
-        }          
           UnlockSharedData;
-          SetEvent(fWaitLock);
-          Result := True; // indicate we have released the barrier
+          If WaitForSingleObject(fReleaseLock,INFINITE) <> WAIT_OBJECT_0 then
+            raise EWSOWaitError.Create('TBarrier.Wait: Failed waiting on release lock.');
+          ExitWait := False;
+          // Releasing should be done by this point. Re-enter waiting.
         end
       else
         begin
-        {
-          Maximum number of waiters not reached.
+          // Releasing is currently not running.
+          Inc(fBarrierSharedData^.WaitCount);
+          If fBarrierSharedData^.WaitCount >= MaxWaitCount then
+            begin
+            {
+              Maximum number of waiting threads for this barrier has been
+              reached.
 
-          Just unlock the shared data and enter waiting on fWaitLock.
-        }
-          UnlockSharedData;
-          If WaitForSingleObject(fWaitLock,INFINITE) <> WAIT_OBJECT_0 then
-            raise EWSOWaitError.Create('TBarrier.Wait: Failed waiting on the barrier.');
-        {
-          The wait lock has been set to signaled, so the barrier is releasing.
+              First prevent other threads from queueing on this barrier by
+              resetting fReleaseLock and indicating the fact in shared data.
+            }
+              If not ResetEvent(fReleaseLock) then
+                raise EWSOEventError.CreateFmt('TBarrier.Wait: Failed to reset RL event (%d).',[GetLastError]);
+              fBarrierSharedData^.Releasing := True;
+              Dec(fBarrierSharedData^.WaitCount); // remove self from waiting count
+            {
+              Now unlock shared data and release all waiting threads from
+              fWaitLock.
 
-          Remove self from waiting threads count and, if we are last to be
-          released, stop releasing and signal end of releasing to threads
-          waiting on fReleaseLock and also mark it in shared data.
-        }
-          LockSharedData;
-          try
-            Dec(fBarrierSharedData^.WaitCount);
-            If fBarrierSharedData^.WaitCount <= 0 then
-              begin
-                fBarrierSharedData^.WaitCount := 0;
-                fBarrierSharedData^.Releasing := False;
-                ResetEvent(fWaitLock);
-                SetEvent(fReleaseLock);
+              Unlocking shared data at this point is secure because any thread
+              that will acquire them will encounter Releasing field to be true
+              and will therefore enter waiting on fReleaseLock, which is now
+              non-signaled.
+            }
+              UnlockSharedData;
+              If not SetEvent(fWaitLock) then
+                raise EWSOEventError.CreateFmt('TBarrier.Wait: Failed to set WL event (%d).',[GetLastError]);
+              Result := True; // indicate we have released the barrier
+            end
+          else
+            begin
+            {
+              Maximum number of waiters not reached.
+
+              Just unlock the shared data and enter waiting on fWaitLock.
+            }
+              UnlockSharedData;
+              If WaitForSingleObject(fWaitLock,INFINITE) <> WAIT_OBJECT_0 then
+                raise EWSOWaitError.Create('TBarrier.Wait: Failed waiting on the barrier.');
+            {
+              The wait lock has been set to signaled, so the barrier is
+              releasing.
+
+              Remove self from waiting threads count and, if we are last to be
+              released, stop releasing and signal end of releasing to threads
+              waiting on fReleaseLock and also mark it in shared data.
+            }
+              LockSharedData;
+              try
+                Dec(fBarrierSharedData^.WaitCount);
+                If fBarrierSharedData^.WaitCount <= 0 then
+                  begin
+                    fBarrierSharedData^.WaitCount := 0;
+                    fBarrierSharedData^.Releasing := False;
+                    If not ResetEvent(fWaitLock) then
+                      raise EWSOEventError.CreateFmt('TBarrier.Wait: Failed to reset WL event (%d).',[GetLastError]);
+                    If not SetEvent(fReleaseLock) then
+                      raise EWSOEventError.CreateFmt('TBarrier.Wait: Failed to set RL event (%d).',[GetLastError]);
+                  end;
+              finally
+                UnlockSharedData;
               end;
-          finally
-            UnlockSharedData;
-          end;
-        end;
-      ExitWait := True;
-    end;
-until ExitWait;
+            end;
+          ExitWait := True;
+      end;
+    until ExitWait;
+  end
+else Result := True;
 end;
 
 //------------------------------------------------------------------------------
@@ -2635,6 +2772,7 @@ Function TBarrier.Release: Integer;
 var
   SetWaitLock:  Boolean;
 begin
+// no need to check for max wait count
 SetWaitLock := False;
 LockSharedData;
 try
@@ -2644,7 +2782,8 @@ try
         begin
           SetWaitLock := True;
           Result := fBarrierSharedData^.WaitCount;
-          ResetEvent(fReleaseLock);
+          If not ResetEvent(fReleaseLock) then
+            raise EWSOEventError.CreateFmt('TBarrier.Release: Failed to reset RL event (%d).',[GetLastError]);
           fBarrierSharedData^.Releasing := True;
         end
       else Result := 0;
@@ -2654,7 +2793,8 @@ finally
   UnlockSharedData;
 end;
 If SetWaitLock then
-  SetEvent(fWaitLock);
+  If not SetEvent(fWaitLock) then
+    raise EWSOEventError.CreateFmt('TBarrier.Release: Failed to set WL event (%d).',[GetLastError]);
 end;
 
 
@@ -2757,6 +2897,7 @@ procedure TReadWriteLock.ReadLock;
 var
   ExitWait: Boolean;
 begin
+ExitWait := False;
 repeat
   If WaitForSingleObject(fReadLock,INFINITE) <> WAIT_OBJECT_0 then
     raise EWSOWaitError.Create('TReadWriteLock.ReadLock: Failed waiting on read lock.');
@@ -2765,7 +2906,8 @@ repeat
     If (fRWLockSharedData^.WriteWaitCount <= 0) and (fRWLockSharedData^.WriteCount <= 0) then
       begin
         Inc(fRWLockSharedData^.ReadCount);
-        ResetEvent(fWriteWaitLock);
+        If not ResetEvent(fWriteWaitLock) then
+          raise EWSOEventError.CreateFmt('TReadWriteLock.ReadLock: Failed to reset WWL event (%d).',[GetLastError]);
         ExitWait := True;
       end
     else ExitWait := False;
@@ -2783,7 +2925,8 @@ LockSharedData;
 try
   Dec(fRWLockSharedData^.ReadCount);
   If fRWLockSharedData^.ReadCount <= 0 then
-    SetEvent(fWriteWaitLock);
+    If not SetEvent(fWriteWaitLock) then
+      raise EWSOEventError.CreateFmt('TReadWriteLock.ReadUnlock: Failed to set WWL event (%d).',[GetLastError]);
 finally
   UnlockSharedData;
 end;
@@ -2796,7 +2939,8 @@ begin
 LockSharedData;
 try
   Inc(fRWLockSharedData^.WriteWaitCount);
-  ResetEvent(fReadLock);
+  If not ResetEvent(fReadLock) then
+    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteLock: Failed to reset RL event (%d).',[GetLastError]);
 finally
   UnlockSharedData;
 end;
@@ -2806,7 +2950,8 @@ If not(WaitForSingleObject(fWriteLock,INFINITE) in [WAIT_OBJECT_0,WAIT_ABANDONED
   raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Failed waiting on write lock.');
 LockSharedData;
 try
-  ResetEvent(fWriteWaitLock);
+  If not ResetEvent(fWriteWaitLock) then
+    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteLock: Failed to reset WWL event (%d).',[GetLastError]);
   Dec(fRWLockSharedData^.WriteWaitCount);
   Inc(fRWLockSharedData^.WriteCount);
 finally
@@ -2821,10 +2966,13 @@ begin
 LockSharedData;
 try
   Dec(fRWLockSharedData^.WriteCount);
-  ReleaseMutex(fWriteLock);
+  If not ReleaseMutex(fWriteLock) then
+    raise EWSOMutexError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to release WL mutex (%d).',[GetLastError]);
   If fRWLockSharedData^.WriteWaitCount <= 0 then
-    SetEvent(fReadLock);
-  SetEvent(fWriteWaitLock);
+    If not SetEvent(fReadLock) then
+      raise EWSOEventError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to set RL event (%d).',[GetLastError]);
+  If not SetEvent(fWriteWaitLock) then
+    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to set WWL event (%d).',[GetLastError]);
 finally
   UnlockSharedData;
 end;
@@ -3223,7 +3371,11 @@ try
       If WaitForSingleObject(fWaitArgs^.WaitInternals.ReadyEvent,INFINITE) <> WAIT_OBJECT_0 then
         raise EWSoWaitError.Create('TWSOGroupWaiterThread.Execute: Failed to wait on ready event.');
     end
-  else SetEvent(fWaitArgs^.WaitInternals.ReadyEvent);
+  else
+    begin
+      If not SetEvent(fWaitArgs^.WaitInternals.ReadyEvent) then
+        raise EWSOEventError.CreateFmt('TWSOGroupWaiterThread.Execute: Failed to set ready event (%d).',[GetLastError]);
+    end;
 {
   No alertable or message waiting is allowed here, therefore do not pass those
   arguments to final wait (alertable and message waits are observed only in
@@ -3235,7 +3387,8 @@ try
   InterlockedCompareExchange(fWaitArgs^.WaitInternals.FirstDone,UInt64Get(fWaitLevelIndex,fWaitGroupIndex),UInt64(-1));
   // if waiting for one object, signal other waits that we have already got the "winner"
   If not fWaitArgs^.WaitParams.WaitAll then
-    SetEvent(fWaitArgs^.WaitInternals.ReleaserEvent);
+    If not SetEvent(fWaitArgs^.WaitInternals.ReleaserEvent) then
+      raise EWSOEventError.CreateFmt('TWSOGroupWaiterThread.Execute: Failed to set releaser event (%d).',[GetLastError]);
 except
   // eat-up all exceptions, so they will not kill the thread
   fWaitArgs^.WaitLevels[fWaitLevelIndex].WaitGroups[fWaitGroupIndex].WaitResult := wrFatal;
@@ -3246,7 +3399,8 @@ end;
   after the invoking thread ends its wait and frees it.
 }
 If InterlockedDecrement(fWaitArgs^.WaitInternals.DoneCounter) <= 0 then
-  SetEvent(fWaitArgs^.WaitInternals.DoneEvent);
+  If not SetEvent(fWaitArgs^.WaitInternals.DoneEvent) then
+    raise EWSOEventError.CreateFmt('TWSOGroupWaiterThread.Execute: Failed to set done event (%d).',[GetLastError]);
 inherited;
 end;
 
@@ -3358,7 +3512,11 @@ try
       If WaitForSingleObject(WaitArgs^.WaitInternals.ReadyEvent,INFINITE) <> WAIT_OBJECT_0 then
         raise EWSoWaitError.Create('WaitForManyHandles_All: Failed to wait on ready event.');
     end
-  else SetEvent(WaitArgs^.WaitInternals.ReadyEvent);
+  else
+    begin
+      If not SetEvent(WaitArgs^.WaitInternals.ReadyEvent) then
+        raise EWSOEventError.CreateFmt('WaitForManyHandles_Level: Failed to set ready event (%d).',[GetLastError]);
+    end;
   // the waiting itself...
   If IsFirstLevel then
     // first level, use Alertable and Message wait settings
@@ -3428,7 +3586,8 @@ try
 
       After that, wait for all waiter threads to finish and free them.
     }
-      SetEvent(WaitArgs^.WaitInternals.ReleaserEvent);
+      If not SetEvent(WaitArgs^.WaitInternals.ReleaserEvent) then
+        raise EWSOEventError.CreateFmt('WaitForManyHandles_Level: Failed to set releaser event (%d).',[GetLastError]);
       For i := Low(WaiterThreads) to High(WaiterThreads) do
         begin
           WaiterThreads[i].WaitFor;
@@ -3449,7 +3608,8 @@ except
   To prevent this deadlock, we set the ready event now - the waiting is
   erroneous anyway, so there is no point in timing protection.
 }
-  SetEvent(WaitArgs^.WaitInternals.ReadyEvent);
+  If not SetEvent(WaitArgs^.WaitInternals.ReadyEvent) then
+    raise EWSOEventError.CreateFmt('WaitForManyHandles_Level: Failed to set ready event (%d).',[GetLastError]);
   WaitArgs^.WaitLevels[WaitLevelIndex].WaitResult := wrFatal;
   WaitArgs^.WaitLevels[WaitLevelIndex].Index := -1;
 end;
@@ -3458,7 +3618,8 @@ end;
   variable memory.
 }
 If InterlockedDecrement(WaitArgs^.WaitInternals.DoneCounter) <= 0 then
-  SetEvent(WaitArgs^.WaitInternals.DoneEvent);
+  If not SetEvent(WaitArgs^.WaitInternals.DoneEvent) then
+    raise EWSOEventError.CreateFmt('WaitForManyHandles_Level: Failed to set done event (%d).',[GetLastError]);
 end;
 
 //------------------------------------------------------------------------------
@@ -3692,7 +3853,8 @@ If Count > 0 then
           So we set the releaser to signaled, which will release all threads
           that are still waiting (they will be automatically freed).
         }
-          SetEvent(WaitArgs.WaitInternals.ReleaserEvent);
+          If not SetEvent(WaitArgs.WaitInternals.ReleaserEvent) then
+            raise EWSOEventError.CreateFmt('WaitForManyHandles_Internal: Failed to set releaser event (%d).',[GetLastError]);
       {
         Wait for all waits to return.
         Necessary for memory integrity - otherwise still running threads might
