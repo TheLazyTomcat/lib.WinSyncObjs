@@ -191,6 +191,13 @@ type
                                  TWinSyncObject                                 
 --------------------------------------------------------------------------------
 ===============================================================================}
+type
+  // used intarnally for better object identification
+  TWSOLockType = (
+    ltEvent,ltMutex,ltSemaphore,ltWaitTimer,  // simple locks
+    ltSmplBarrier,ltBarrier,ltCondVar,ltCondVarEx,ltRWLock  // xomle locks
+  );
+
 {===============================================================================
     TWinSyncObject - class declaration
 ===============================================================================}
@@ -200,6 +207,7 @@ type
     fLastError: DWORD;
     fName:      String;
     Function RectifyAndSetName(const Name: String): Boolean; virtual;
+    class Function GetLockType: TWSOLockType; virtual; abstract;
   public
     constructor Create;
   {
@@ -292,6 +300,8 @@ const
 ===============================================================================}
 type
   TEvent = class(TSimpleWinSyncObject)
+  protected
+    class Function GetLockType: TWSOLockType; override;
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset, InitialState: Boolean; const Name: String); overload;
     constructor Create(ManualReset, InitialState: Boolean; const Name: String); overload;
@@ -330,6 +340,8 @@ const
 ===============================================================================}
 type
   TMutex = class(TSimpleWinSyncObject)
+  protected
+    class Function GetLockType: TWSOLockType; override;
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialOwner: Boolean; const Name: String); overload;
     constructor Create(InitialOwner: Boolean; const Name: String); overload;
@@ -357,6 +369,8 @@ const
 ===============================================================================}
 type
   TSemaphore = class(TSimpleWinSyncObject)
+  protected
+    class Function GetLockType: TWSOLockType; override;
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; InitialCount, MaximumCount: Integer; const Name: String); overload;
     constructor Create(InitialCount, MaximumCount: Integer; const Name: String); overload;
@@ -390,6 +404,7 @@ type
 
   TWaitableTimer = class(TSimpleWinSyncObject)
   protected
+    class Function GetLockType: TWSOLockType; override;
     Function DateTimeToFileTime(DateTime: TDateTime): TFileTime; virtual;
   public
     constructor Create(SecurityAttributes: PSecurityAttributes; ManualReset: Boolean; const Name: String); overload;
@@ -513,11 +528,13 @@ type
     FinalSharedData must be able to accept partialy initialized or completely
     uninitialized shared data. Also, this function is called only once when the
     shared data are being completely removed from the system.
+
+      NOTE - default implementation of all these methods does nothing.
   }
-    procedure InitSharedData; virtual; abstract;
-    procedure BindSharedData; virtual; abstract;
-    procedure FinalSharedData; virtual; abstract;
-    // locks management methods (internal workings)
+    procedure InitSharedData; virtual;
+    procedure BindSharedData; virtual;
+    procedure FinalSharedData; virtual;
+    // locks management methods
     procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); virtual; abstract;
     procedure CreateLocks; virtual; abstract;
     procedure OpenLocks; virtual; abstract;
@@ -546,6 +563,48 @@ type
 
 {===============================================================================
 --------------------------------------------------------------------------------
+                                 TSimpleBarrier
+--------------------------------------------------------------------------------
+===============================================================================}
+type
+  TWSOSimpleBarrierSharedData = packed record
+    SharedUserData:   TWSOSharedUserData;
+    RefCount:         Int32;
+    MaxWaitCount:     Int32;  // invariant value, set only once
+    WaitCount:        Int32;  // interlocked access only
+  end;
+  PWSOSimpleBarrierSharedData = ^TWSOSimpleBarrierSharedData;
+
+{===============================================================================
+    TSimpleBarrier - class declaration
+===============================================================================}
+type
+  TSimpleBarrier = class(TComplexWinSyncObject)
+  protected
+    fEntryLock:         THandle;  // semaphore with initial value and max value of count
+    fReleaseLock:       THandle;  // manual-reset event, initially locked
+    fBarrierSharedData: PWSOSimpleBarrierSharedData;
+    fCount:             Integer;
+    class Function LocksSharedData: Boolean; override;
+    class Function GetSharedDataLockSuffix: String; override;
+    procedure InitSharedData; override;
+    procedure BindSharedData; override;
+    procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
+    procedure CreateLocks; override;
+    procedure OpenLocks; override;
+    procedure CloseLocks; override;
+    class Function GetLockType: TWSOLockType; override;
+  public
+    constructor Create(const Name: String); override;
+    constructor Create; override;
+    constructor Create(Count: Integer; const Name: String); overload;
+    constructor Create(Count: Integer); overload;
+    Function Wait: Boolean; virtual;  // returns true if this call released the barrier
+    property Count: Integer read fCount;
+  end;
+
+{===============================================================================
+--------------------------------------------------------------------------------
                                     TBarrier
 --------------------------------------------------------------------------------
 ===============================================================================}
@@ -554,7 +613,6 @@ type
     SharedUserData:   TWSOSharedUserData;
     RefCount:         Int32;
     MaxWaitCount:     Int32;    // invariant value, set only once
-    MaxWaitCountSet:  Boolean;  // -//-
     WaitCount:        Int32;
     Releasing:        Boolean;
   end;
@@ -566,8 +624,8 @@ type
 type
   TBarrier = class(TComplexWinSyncObject){$IFNDEF CompTest}{$message 'revisit'}{$ENDIF}
   protected
-    fEntryLock:   THandle;  // manual-reset event
-    fReleaseLock: THandle;  // manual-reset event
+    fEntryLock:         THandle;  // manual-reset event, unlocked
+    fReleaseLock:       THandle;  // manual-reset event, locked
     fBarrierSharedData: PWSOBarrierSharedData;
     Function GetCount: Integer; virtual;
     class Function GetSharedDataLockSuffix: String; override;
@@ -589,7 +647,7 @@ type
     Function Wait: Boolean; virtual;
   {
     Releases all waiting threads, irrespective of their count, and sets the
-    barrier back to a non-signaled (blocking) state.  
+    barrier back to a non-signaled (blocking) state.
   }
     Function Release: Integer; virtual;
     property Count: Integer read GetCount;
@@ -616,7 +674,7 @@ type
     Broadcasting:   Boolean;
   end;
   PWSOCondSharedData = ^TWSOCondSharedData;
-
+(*
   // types for autocycle
   TWSOWakeOption = (woWakeOne,woWakeAll,woWakeBeforeUnlock);
   TWSOWakeOptions = set of TWSOWakeOption;
@@ -626,7 +684,7 @@ type
 
   TWSODataAccessEvent = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions) of object;
   TWSODataAccessCallback = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions);
-(*
+
 {===============================================================================
     TConditionVariable - class declaration
 ===============================================================================}
@@ -1012,6 +1070,64 @@ Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boo
 }
 Function WaitResultToStr(WaitResult: TWSOWaitResult): String;
 
+type
+  TReadWriteLock = class(TComplexWinSyncObject)
+  public
+    procedure ReadLock; virtual; abstract;
+    procedure ReadUnlock; virtual; abstract;
+    procedure WriteLock; virtual; abstract;
+    procedure WriteUnlock; virtual; abstract;
+  end;
+
+  TWSOWakeOption = (woWakeOne,woWakeAll,woWakeBeforeUnlock);
+  TWSOWakeOptions = set of TWSOWakeOption;
+
+  TWSOPredicateCheckEvent = procedure(Sender: TObject; var Predicate: Boolean) of object;
+  TWSOPredicateCheckCallback = procedure(Sender: TObject; var Predicate: Boolean);
+
+  TWSODataAccessEvent = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions) of object;
+  TWSODataAccessCallback = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions);
+
+  TConditionVariable = class(TComplexWinSyncObject)
+  protected
+    fOnPredicateCheckEvent:     TWSOPredicateCheckEvent;
+    fOnPredicateCheckCallback:  TWSOPredicateCheckCallback;
+    fOnDataAccessEvent:         TWSODataAccessEvent;
+    fOnDataAccessCallback:      TWSODataAccessCallback;
+  public
+    procedure Sleep(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
+    procedure Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
+    procedure Wake; virtual; abstract;
+    procedure WakeAll; virtual; abstract;
+    procedure AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
+    procedure AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
+    // events
+    property OnPredicateCheckEvent: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
+    property OnPredicateCheckCallback: TWSOPredicateCheckCallback read fOnPredicateCheckCallback write fOnPredicateCheckCallback;
+    property OnPredicateCheck: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
+    property OnDataAccessEvent: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;    
+    property OnDataAccessCallback: TWSODataAccessCallback read fOnDataAccessCallback write fOnDataAccessCallback;
+    property OnDataAccess: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;
+  end;
+
+  TBarrier = class(TComplexWinSyncObject)
+  public
+    constructor Create(SecurityAttributes: PSecurityAttributes; Count: Integer; const Name: String); overload; virtual; abstract;
+    constructor Create(Count: Integer; const Name: String); overload; virtual; abstract;
+    constructor Create(Count: Integer); overload; virtual; abstract;
+    Function Wait: Boolean; virtual; abstract;
+    Function Release: Integer; virtual; abstract;
+  end;
+
+  TConditionVariableEx = class(TConditionVariable)
+  public
+    procedure Lock; virtual; abstract;
+    procedure Unlock; virtual; abstract;
+    procedure Sleep(Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
+    procedure AutoCycle(Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
+  end;
+{$message '^^debug^^'}
+
 implementation
 
 uses
@@ -1232,7 +1348,7 @@ end;
 constructor TSimpleWinSyncObject.DuplicateFrom(SourceObject: TSimpleWinSyncObject);
 begin
 inherited Create;
-If SourceObject is Self.ClassType then
+If SourceObject.GetLockType = Self.GetLockType then
   DuplicateAndSetHandle(GetCurrentProcess,SourceObject.Handle)
 else
   raise EWSOInvalidObject.CreateFmt('TSimpleWinSyncObject.DuplicateFrom: Incompatible source object (%s).',[SourceObject.ClassName]);
@@ -1331,6 +1447,15 @@ end;
 {===============================================================================
     TEvent - class implementation
 ===============================================================================}
+{-------------------------------------------------------------------------------
+    TEvent - protected methods
+-------------------------------------------------------------------------------}
+
+class Function TEvent.GetLockType: TWSOLockType;
+begin
+Result := ltEvent;
+end;
+
 {-------------------------------------------------------------------------------
     TEvent - public methods
 -------------------------------------------------------------------------------}
@@ -1464,6 +1589,15 @@ end;
     TMutex - class implementation
 ===============================================================================}
 {-------------------------------------------------------------------------------
+    TMutex - protected methods
+-------------------------------------------------------------------------------}
+
+class Function TMutex.GetLockType: TWSOLockType;
+begin
+Result := ltMutex;
+end;
+
+{-------------------------------------------------------------------------------
     TMutex - public methods
 -------------------------------------------------------------------------------}
 
@@ -1557,6 +1691,15 @@ end;
 {===============================================================================
     TSemaphore - class implementation
 ===============================================================================}
+{-------------------------------------------------------------------------------
+    TSemaphore - protected methods
+-------------------------------------------------------------------------------}
+
+class Function TSemaphore.GetLockType: TWSOLockType;
+begin
+Result := ltSemaphore;
+end;
+
 {-------------------------------------------------------------------------------
     TSemaphore - public methods
 -------------------------------------------------------------------------------}
@@ -1681,6 +1824,13 @@ Function WinSetWaitableTimer(
 {-------------------------------------------------------------------------------
     TWaitableTimer - protected methods
 -------------------------------------------------------------------------------}
+
+class Function TWaitableTimer.GetLockType: TWSOLockType;
+begin
+Result := ltWaitTimer;
+end;
+
+//------------------------------------------------------------------------------
 
 {$IFDEF FPCDWM}{$PUSH}W5057{$ENDIF}
 Function TWaitableTimer.DateTimeToFileTime(DateTime: TDateTime): TFileTime;
@@ -1964,6 +2114,27 @@ end;
 
 //------------------------------------------------------------------------------
 
+procedure TComplexWinSyncObject.InitSharedData;
+begin
+// do nothing
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TComplexWinSyncObject.BindSharedData;
+begin
+// do nothing
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TComplexWinSyncObject.FinalSharedData;
+begin
+// do nothing
+end;
+
+//------------------------------------------------------------------------------
+
 procedure TComplexWinSyncObject.InternalCreate(const Name: String);
 begin
 fFullyInitialized := False; // just to be sure it is really false 
@@ -2196,7 +2367,7 @@ end;
 constructor TComplexWinSyncObject.DuplicateFrom(SourceObject: TComplexWinSyncObject);
 begin
 inherited Create;
-If SourceObject is Self.ClassType then
+If SourceObject.GetLockType = Self.GetLockType then
   begin
     If not SourceObject.ProcessShared then
       begin
@@ -2265,6 +2436,183 @@ destructor TComplexWinSyncObject.Destroy;
 begin
 InternalClose;
 inherited;
+end;
+
+
+{===============================================================================
+--------------------------------------------------------------------------------
+                                 TSimpleBarrier
+--------------------------------------------------------------------------------
+===============================================================================}
+const
+  WSO_SBARR_SUFFIX_SHAREDDATA  = '@sbr_slk';
+  WSO_SBARR_SUFFIX_ENTRYLOCK   = '@sbr_elk';
+  WSO_SBARR_SUFFIX_RELEASELOCK = '@sbr_rlk';
+
+{===============================================================================
+    TSimpleBarrier - class implementation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TSimpleBarrier - protected methods
+-------------------------------------------------------------------------------}
+
+class Function TSimpleBarrier.LocksSharedData: Boolean;
+begin
+Result := False;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TSimpleBarrier.GetSharedDataLockSuffix: String;
+begin
+Result := WSO_SBARR_SUFFIX_SHAREDDATA;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TSimpleBarrier.InitSharedData;
+begin
+fBarrierSharedData := PWSOSimpleBarrierSharedData(fSharedData);
+fBarrierSharedData^.MaxWaitCount := fCount;
+InterlockedStore(fBarrierSharedData^.WaitCount,0);
+ReadWriteBarrier;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TSimpleBarrier.BindSharedData;
+begin
+fBarrierSharedData := PWSOSimpleBarrierSharedData(fSharedData);
+fCount := fBarrierSharedData^.MaxWaitCount;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TSimpleBarrier.DuplicateLocks(SourceObject: TComplexWinSyncObject);
+begin
+DuplicateAndSetHandle(fEntryLock,TSimpleBarrier(SourceObject).fEntryLock);
+DuplicateAndSetHandle(fReleaseLock,TSimpleBarrier(SourceObject).fReleaseLock);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TSimpleBarrier.CreateLocks;
+begin
+If fProcessShared then
+  begin
+    CheckAndSetHandle(fEntryLock,CreateSemaphoreW(nil,fBarrierSharedData^.MaxWaitCount,
+      fBarrierSharedData^.MaxWaitCount,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_ENTRYLOCK))));
+    CheckAndSetHandle(fReleaseLock,CreateEventW(nil,True,False,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_RELEASELOCK))));
+  end
+else
+  begin
+    CheckAndSetHandle(fEntryLock,CreateSemaphoreW(nil,fCount,fCount,nil));
+    CheckAndSetHandle(fReleaseLock,CreateEventW(nil,True,False,nil));
+  end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TSimpleBarrier.OpenLocks;
+begin
+CheckAndSetHandle(fEntryLock,OpenSemaphoreW(SYNCHRONIZE or SEMAPHORE_MODIFY_STATE,False,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_ENTRYLOCK))));
+CheckAndSetHandle(fReleaseLock,OpenEventW(SYNCHRONIZE or Event_MODIFY_STATE,False,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_RELEASELOCK))));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TSimpleBarrier.CloseLocks;
+begin
+CloseHandle(fReleaseLock);
+CloseHandle(fEntryLock);
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TSimpleBarrier.GetLockType: TWSOLockType;
+begin
+Result := ltSmplBarrier;
+end;
+
+{-------------------------------------------------------------------------------
+    TSimpleBarrier - public methods
+-------------------------------------------------------------------------------}
+
+constructor TSimpleBarrier.Create(const Name: String);
+begin
+{
+  Barrier with count of 1 is seriously pointless, but if you call a constructor
+  without specifying the count, what do you expect to happen?!
+}
+Create(1,Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TSimpleBarrier.Create;
+begin
+Create(1,'');
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TSimpleBarrier.Create(Count: Integer; const Name: String);
+begin
+fCount := Count;
+inherited Create(Name);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TSimpleBarrier.Create(Count: Integer);
+begin
+Create(Count,'');
+end;
+
+//------------------------------------------------------------------------------
+
+Function TSimpleBarrier.Wait: Boolean;
+begin
+Result := False;
+{
+  First try enter waiting on the barrier. If blocked it means the entry
+  semaphore is zero and a release is in progress.
+}
+case WaitForSingleObject(fEntryLock,INFINITE) of
+  WAIT_OBJECT_0:;
+  WAIT_FAILED:
+    raise EWSOWaitError.CreateFmt('TSimpleBarrier.Wait: Failed to enter barrier (%d).',[GetLastError]);
+else
+  raise EWSOWaitError.Create('TSimpleBarrier.Wait: Failed to enter barrier.');
+end;
+// increment wait counter...
+If InterlockedIncrement(fBarrierSharedData^.WaitCount) >= fBarrierSharedData^.MaxWaitCount then
+  begin
+    // ...barrier is full (fEntryLock should be locked by now), start releasing
+    If not SetEvent(fReleaseLock) then
+      raise EWSOEventError.CreateFmt('TSimpleBarrier.Wait: Failed to start release (%d).',[GetLastError]);
+    Result := True;
+  end;
+// enter waiting for a release
+case WaitForSingleObject(fReleaseLock,INFINITE) of
+  WAIT_OBJECT_0:;
+  WAIT_FAILED:
+    raise EWSOWaitError.CreateFmt('TSimpleBarrier.Wait: Failed release wait (%d).',[GetLastError]);
+else
+  raise EWSOWaitError.Create('TSimpleBarrier.Wait: Failed release wait.');
+end;
+{
+  Now we are released, decrement wait counter and if it reaches zero, stop
+  release and unlock the entry semaphore to allow more waiters to enter the
+  barrier.
+}
+If InterlockedDecrement(fBarrierSharedData^.WaitCount) <= 0 then
+  begin
+    If not ResetEvent(fReleaseLock) then
+      raise EWSOEventError.CreateFmt('TSimpleBarrier.Wait: Failed to stop release (%d).',[GetLastError]);
+    If not ReleaseSemaphore(fEntryLock,fBarrierSharedData^.MaxWaitCount,nil) then
+      raise EWSOSemaphoreError.CreateFmt('TSimpleBarrier.Wait: Failed to release entry lock (%d).',[GetLastError]);
+  end;
 end;
 
 (*
