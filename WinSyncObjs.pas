@@ -869,7 +869,7 @@ const
 ===============================================================================}
 {
   Waits on multiple handles - the function does not return until wait criteria
-  are met, an error occurs or the wait times-out (which of these occured is
+  are met, an error occurs or the wait times-out (which of these occurred is
   indicated by the result).
   
   Handles of the following windows system objects are allowed:
@@ -3536,13 +3536,12 @@ const
   MWMO_INPUTAVAILABLE = DWORD($00000004);
 
 const
-  MAXIMUM_WAIT_OBJECTS = 3; {$IFNDEF CompTest}{$message 'debug'}{$ENDIF}
+  MAXIMUM_WAIT_OBJECTS = 3; {$IFNDEF CompTest}{$message 'debug (should be 64)'}{$ENDIF}
 
 {===============================================================================
     Wait functions - internal functions
 ===============================================================================}
 
-//Function MaxWaitObjCount(MsgWaitOptions: TMessageWaitOptions): Integer;
 Function RectifiedMaxWaitCount(MsgWaitOptions: TMessageWaitOptions): Integer;
 begin
 If mwoEnable in MsgWaitOptions then
@@ -3613,21 +3612,22 @@ If (Count > 0) and (Count <= RectifiedMaxWaitCount(MsgWaitOptions)) then
         else Result := wrMessage;
       WAIT_ABANDONED_0..
       Pred(WAIT_ABANDONED_0 + MAXIMUM_WAIT_OBJECTS):
-        If not(mwoEnable in MsgWaitOptions) or (Integer(WaitResult - WAIT_ABANDONED_0) < Count) then
+        If Integer(WaitResult - WAIT_ABANDONED_0) < Count then
           begin
             Result := wrAbandoned;
             If not WaitAll then
               Index := Integer(WaitResult - WAIT_ABANDONED_0);
           end
-        else Result := wrError;
+        else raise EWSOMultiWaitError.CreateFmt('WaitForMultipleHandles_Sys: ' +
+          'Invalid wait result (abandoned + %d @ %d).',[Integer(WaitResult - WAIT_ABANDONED_0),Count]);
       WAIT_IO_COMPLETION:
         Result := wrIOCompletion;
       WAIT_TIMEOUT:
         Result := wrTimeout;
       WAIT_FAILED:
-        Result := wrError;
+        Result := wrError;   
     else
-      Result := wrError;
+      raise EWSOMultiWaitError.CreateFmt('WaitForMultipleHandles_Sys: Invalid wait result (%d).',[WaitResult]);
     end;
     If Result = wrError then
       Index := Integer(GetLastError);
@@ -3808,7 +3808,7 @@ type
     is set (to signaled), which will release all waiting threads at once and
     they will then enter the main waiting.
 
-    This is done to minimize time windows in which waiter threads are entering
+    This is done to minimize time window in which waiter threads are entering
     their waitings.
   }
     ReadyCounter:   Integer;
