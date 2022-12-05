@@ -121,8 +121,8 @@ uses
 type
   EWSOException = class(Exception);
 
-  EWSOTimeConversionError    = class(EWSOException);  
-  EWSOInitializationError    = class(EWSOException);  
+  EWSOTimeConversionError    = class(EWSOException);
+  EWSOInitializationError    = class(EWSOException);
   EWSOHandleDuplicationError = class(EWSOException);
   EWSOOpenError              = class(EWSOException);
 
@@ -506,7 +506,6 @@ type
     procedure DuplicateAndSetHandle(out Destination: THandle; Handle: THandle); virtual;
     // shared data lock management methods
     class Function LocksSharedData: Boolean; virtual;
-    class Function GetSharedDataLockSuffix: String; virtual; abstract;
     procedure LockSharedData; virtual;
     procedure UnlockSharedData; virtual;
     // shared data management methods
@@ -542,6 +541,17 @@ type
     procedure InternalCreate(const Name: String); virtual;
     procedure InternalOpen(const Name: String); virtual;
     procedure InternalClose; virtual;
+    // naming
+  {
+    ClassNameSuffix must return a string in the form '@xxx_', where xxx must
+    be unique for a class/locker type.
+
+    GetDecoratedName returns the object name with appended ClassNameSuffix
+    followed by Suffix parameter (this parameter must be exactly three
+    characters long, not more, not less).
+  }
+    class Function GetNameSuffix: String; virtual; abstract;
+    Function GetDecoratedName(const Suffix: String): String; virtual;
   public
     constructor Create(const Name: String); overload; virtual;
     constructor Create; overload; virtual;
@@ -585,7 +595,6 @@ type
     fBarrierSharedData: PWSOSimpleBarrierSharedData;
     fCount:             Integer;
     class Function LocksSharedData: Boolean; override;
-    class Function GetSharedDataLockSuffix: String; override;
     procedure InitSharedData; override;
     procedure BindSharedData; override;
     procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
@@ -593,6 +602,7 @@ type
     procedure OpenLocks; override;
     procedure CloseLocks; override;
     class Function GetLockType: TWSOLockType; override;
+    class Function GetNameSuffix: String; override;
   public
     constructor Create(const Name: String); override;
     constructor Create; override;
@@ -627,7 +637,6 @@ type
     fReleaseLock:       THandle;  // manual-reset event, locked
     fBarrierSharedData: PWSOBarrierSharedData;
     fCount:             Integer;
-    class Function GetSharedDataLockSuffix: String; override;
     procedure InitSharedData; override;
     procedure BindSharedData; override;
     procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
@@ -635,6 +644,7 @@ type
     procedure OpenLocks; override;
     procedure CloseLocks; override;
     class Function GetLockType: TWSOLockType; override;
+    class Function GetNameSuffix: String; override;
   public
     constructor Create(const Name: String); override;
     constructor Create; override;
@@ -670,16 +680,16 @@ type
     Broadcasting:   Boolean;
   end;
   PWSOCondSharedData = ^TWSOCondSharedData;
-(*
+
   // types for autocycle
   TWSOWakeOption = (woWakeOne,woWakeAll,woWakeBeforeUnlock);
   TWSOWakeOptions = set of TWSOWakeOption;
 
-  TWSOPredicateCheckEvent = procedure(Sender: TObject; var Predicate: Boolean) of object;
   TWSOPredicateCheckCallback = procedure(Sender: TObject; var Predicate: Boolean);
+  TWSOPredicateCheckEvent = procedure(Sender: TObject; var Predicate: Boolean) of object;
 
-  TWSODataAccessEvent = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions) of object;
   TWSODataAccessCallback = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions);
+  TWSODataAccessEvent = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions) of object;
 
 {===============================================================================
     TConditionVariable - class declaration
@@ -687,23 +697,22 @@ type
 type
   TConditionVariable = class(TComplexWinSyncObject){$IFNDEF CompTest}{$message 'revisit'}{$ENDIF}
   protected
-    fWaitLock:                  THandle;  // semaphore
-    fBroadcastDoneLock:         THandle;  // manual-reset event
+    fWaitLock:                  THandle;  // semaphore, init 0, max $7FFFFFFF
+    fBroadcastDoneLock:         THandle;  // manual-reset event, locked
     fCondSharedData:            PWSOCondSharedData;
     // autocycle events
-    fOnPredicateCheckEvent:     TWSOPredicateCheckEvent;
     fOnPredicateCheckCallback:  TWSOPredicateCheckCallback;
-    fOnDataAccessEvent:         TWSODataAccessEvent;
+    fOnPredicateCheckEvent:     TWSOPredicateCheckEvent;
     fOnDataAccessCallback:      TWSODataAccessCallback;
-    class Function GetSharedDataLockSuffix: String; override;
-    // shared data management methods
-    procedure AllocateSharedData; override;
-    procedure FreeSharedData; override;
-    // locks management methods
-    procedure CreateLocks(SecurityAttributes: PSecurityAttributes); override;
-    procedure OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean); override;
+    fOnDataAccessEvent:         TWSODataAccessEvent;
+    procedure InitSharedData; override;
+    procedure BindSharedData; override;
     procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
-    procedure DestroyLocks; override;
+    procedure CreateLocks; override;
+    procedure OpenLocks; override;
+    procedure CloseLocks; override;
+    class Function GetLockType: TWSOLockType; override;
+    class Function GetNameSuffix: String; override;
     // autocycle events firing
     Function DoOnPredicateCheck: Boolean; virtual;
     Function DoOnDataAccess: TWSOWakeOptions; virtual;
@@ -714,8 +723,8 @@ type
     In both overloads, DataLock parameter can only be an event, mutex or
     semaphore, no other type of synchronizer is supported.
   }
-    procedure Sleep(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
-    procedure Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
+    procedure Sleep(DataLock: THandle; Timeout: DWORD = INFINITE); overload; virtual;
+    procedure Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE); overload; virtual;
     procedure Wake; virtual;
     procedure WakeAll; virtual;
   {
@@ -729,17 +738,17 @@ type
     Second overload allows for event, mutex and semaphore object to be used
     as data synchronizer.
   }
-    procedure AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
-    procedure AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
+    procedure AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE); overload; virtual;
+    procedure AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE); overload; virtual;
     // events
-    property OnPredicateCheckEvent: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
     property OnPredicateCheckCallback: TWSOPredicateCheckCallback read fOnPredicateCheckCallback write fOnPredicateCheckCallback;
+    property OnPredicateCheckEvent: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
     property OnPredicateCheck: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
-    property OnDataAccessEvent: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;    
-    property OnDataAccessCallback: TWSODataAccessCallback read fOnDataAccessCallback write fOnDataAccessCallback;
+    property OnDataAccessCallback: TWSODataAccessCallback read fOnDataAccessCallback write fOnDataAccessCallback;    
+    property OnDataAccessEvent: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;
     property OnDataAccess: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;
   end;
-
+(*
 {===============================================================================
 --------------------------------------------------------------------------------
                               TConditionVariableEx
@@ -1073,37 +1082,6 @@ type
     procedure ReadUnlock; virtual; abstract;
     procedure WriteLock; virtual; abstract;
     procedure WriteUnlock; virtual; abstract;
-  end;
-
-  TWSOWakeOption = (woWakeOne,woWakeAll,woWakeBeforeUnlock);
-  TWSOWakeOptions = set of TWSOWakeOption;
-
-  TWSOPredicateCheckEvent = procedure(Sender: TObject; var Predicate: Boolean) of object;
-  TWSOPredicateCheckCallback = procedure(Sender: TObject; var Predicate: Boolean);
-
-  TWSODataAccessEvent = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions) of object;
-  TWSODataAccessCallback = procedure(Sender: TObject; var WakeOptions: TWSOWakeOptions);
-
-  TConditionVariable = class(TComplexWinSyncObject)
-  protected
-    fOnPredicateCheckEvent:     TWSOPredicateCheckEvent;
-    fOnPredicateCheckCallback:  TWSOPredicateCheckCallback;
-    fOnDataAccessEvent:         TWSODataAccessEvent;
-    fOnDataAccessCallback:      TWSODataAccessCallback;
-  public
-    procedure Sleep(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
-    procedure Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
-    procedure Wake; virtual; abstract;
-    procedure WakeAll; virtual; abstract;
-    procedure AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
-    procedure AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
-    // events
-    property OnPredicateCheckEvent: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
-    property OnPredicateCheckCallback: TWSOPredicateCheckCallback read fOnPredicateCheckCallback write fOnPredicateCheckCallback;
-    property OnPredicateCheck: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
-    property OnDataAccessEvent: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;    
-    property OnDataAccessCallback: TWSODataAccessCallback read fOnDataAccessCallback write fOnDataAccessCallback;
-    property OnDataAccess: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;
   end;
 
   TConditionVariableEx = class(TConditionVariable)
@@ -1983,6 +1961,12 @@ const
 
   WSO_CPLX_SUFFIX_LENGTH = 8; // all suffixes must have the same length
 
+const
+  WSO_CPLX_SUFFIX_SHAREDDATA     = 'shr';
+  WSO_CPLX_SUFFIX_SHAREDDATALOCK = 'slk';
+
+//------------------------------------------------------------------------------
+
 Function WSO_CPLX_SHARED_ITEMSIZE: Integer; // originally a constant
 begin
 Result := MaxIntValue([
@@ -2129,14 +2113,15 @@ If RectifyAndSetName(Name) then
   begin
     // process-shared object
     // alocate shared data
-    fNamedSharedItem := TNamedSharedItem.CreateLocked(fName,WSO_CPLX_SHARED_ITEMSIZE,WSO_CPLX_SHARED_NAMESPACE);
+    fNamedSharedItem := TNamedSharedItem.CreateLocked(GetDecoratedName(WSO_CPLX_SUFFIX_SHAREDDATA),
+      WSO_CPLX_SHARED_ITEMSIZE,WSO_CPLX_SHARED_NAMESPACE);
     try
       try
         // create shared data lock
         If LocksSharedData then
           begin
             CheckAndSetHandle(fSharedDataLock.ProcessSharedLock,
-              CreateMutexW(nil,RectBool(False),PWideChar(StrToWide(fName + GetSharedDataLockSuffix))));
+              CreateMutexW(nil,RectBool(False),PWideChar(StrToWide(GetDecoratedName(WSO_CPLX_SUFFIX_SHAREDDATALOCK)))));
             fSharedDataLock.LockType := sltMutex;
           end
         else fSharedDataLock.LockType := sltNone;
@@ -2229,14 +2214,15 @@ fFullyInitialized := False;
 If RectifyAndSetName(Name) then
   begin
     // allocate/open shared data
-    fNamedSharedItem := TNamedSharedItem.CreateLocked(fName,WSO_CPLX_SHARED_ITEMSIZE,WSO_CPLX_SHARED_NAMESPACE);
+    fNamedSharedItem := TNamedSharedItem.CreateLocked(GetDecoratedName(WSO_CPLX_SUFFIX_SHAREDDATA),
+      WSO_CPLX_SHARED_ITEMSIZE,WSO_CPLX_SHARED_NAMESPACE);
     try
       try
         // open shared data lock
         If LocksSharedData then
           begin
             CheckAndSetHandle(fSharedDataLock.ProcessSharedLock,
-              OpenMutexW(SYNCHRONIZE or MUTEX_MODIFY_STATE,False,PWideChar(StrToWide(fName + GetSharedDataLockSuffix))));
+              OpenMutexW(SYNCHRONIZE or MUTEX_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_CPLX_SUFFIX_SHAREDDATALOCK)))));
             fSharedDataLock.LockType := sltMutex;
           end
         else fSharedDataLock.LockType := sltNone;
@@ -2322,6 +2308,16 @@ If fFullyInitialized then
         end;
       end;
   end;
+end;
+
+//------------------------------------------------------------------------------
+
+Function TComplexWinSyncObject.GetDecoratedName(const Suffix: String): String;
+begin
+If Length(Suffix) = 3 then
+  Result := fName + GetNameSuffix + Suffix
+else
+  raise EWSOInvalidValue.CreateFmt('TComplexWinSyncObject.GetDecoratedName: Invalid suffix "%s".',[Suffix]);
 end;
 
 {-------------------------------------------------------------------------------
@@ -2432,9 +2428,10 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 const
-  WSO_SBARR_SUFFIX_SHAREDDATA  = '@sbr_slk';
-  WSO_SBARR_SUFFIX_ENTRYLOCK   = '@sbr_elk';
-  WSO_SBARR_SUFFIX_RELEASELOCK = '@sbr_rlk';
+  WSO_SBARR_SUFFIX  = '@sbr_';
+
+  WSO_SBARR_SUFFIX_ENTRYLOCK   = 'elk';
+  WSO_SBARR_SUFFIX_RELEASELOCK = 'rlk';
 
 {===============================================================================
     TSimpleBarrier - class implementation
@@ -2450,15 +2447,9 @@ end;
 
 //------------------------------------------------------------------------------
 
-class Function TSimpleBarrier.GetSharedDataLockSuffix: String;
-begin
-Result := WSO_SBARR_SUFFIX_SHAREDDATA;
-end;
-
-//------------------------------------------------------------------------------
-
 procedure TSimpleBarrier.InitSharedData;
 begin
+inherited;
 fBarrierSharedData := PWSOSimpleBarrierSharedData(fSharedData);
 fBarrierSharedData^.MaxWaitCount := fCount;
 InterlockedStore(fBarrierSharedData^.WaitCount,0);
@@ -2469,6 +2460,7 @@ end;
 
 procedure TSimpleBarrier.BindSharedData;
 begin
+inherited;
 fBarrierSharedData := PWSOSimpleBarrierSharedData(fSharedData);
 fCount := fBarrierSharedData^.MaxWaitCount;
 end;
@@ -2488,8 +2480,8 @@ begin
 If fProcessShared then
   begin
     CheckAndSetHandle(fEntryLock,CreateSemaphoreW(nil,fBarrierSharedData^.MaxWaitCount,
-      fBarrierSharedData^.MaxWaitCount,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_ENTRYLOCK))));
-    CheckAndSetHandle(fReleaseLock,CreateEventW(nil,True,False,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_RELEASELOCK))));
+      fBarrierSharedData^.MaxWaitCount,PWideChar(StrToWide(GetDecoratedName(WSO_SBARR_SUFFIX_ENTRYLOCK)))));
+    CheckAndSetHandle(fReleaseLock,CreateEventW(nil,True,False,PWideChar(StrToWide(GetDecoratedName(WSO_SBARR_SUFFIX_RELEASELOCK)))));
   end
 else
   begin
@@ -2503,9 +2495,9 @@ end;
 procedure TSimpleBarrier.OpenLocks;
 begin
 CheckAndSetHandle(fEntryLock,
-  OpenSemaphoreW(SYNCHRONIZE or SEMAPHORE_MODIFY_STATE,False,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_ENTRYLOCK))));
+  OpenSemaphoreW(SYNCHRONIZE or SEMAPHORE_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_SBARR_SUFFIX_ENTRYLOCK)))));
 CheckAndSetHandle(fReleaseLock,
-  OpenEventW(SYNCHRONIZE or Event_MODIFY_STATE,False,PWideChar(StrToWide(fName + WSO_SBARR_SUFFIX_RELEASELOCK))));
+  OpenEventW(SYNCHRONIZE or Event_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_SBARR_SUFFIX_RELEASELOCK)))));
 end;
 
 //------------------------------------------------------------------------------
@@ -2521,6 +2513,13 @@ end;
 class Function TSimpleBarrier.GetLockType: TWSOLockType;
 begin
 Result := ltSmplBarrier;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TSimpleBarrier.GetNameSuffix: String;
+begin
+Result := WSO_SBARR_SUFFIX;
 end;
 
 {-------------------------------------------------------------------------------
@@ -2626,9 +2625,10 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 const
-  WSO_BARR_SUFFIX_SHAREDDATA  = '@brr_slk';
-  WSO_BARR_SUFFIX_ENTRYLOCK   = '@brr_elk';
-  WSO_BARR_SUFFIX_RELEASELOCK = '@brr_rlk';
+  WSO_BARR_SUFFIX = '@brr_';
+
+  WSO_BARR_SUFFIX_ENTRYLOCK   = 'elk';
+  WSO_BARR_SUFFIX_RELEASELOCK = 'rlk';
 
 {===============================================================================
     TBarrier - class implementation
@@ -2637,15 +2637,9 @@ const
     TBarrier - protected methods
 -------------------------------------------------------------------------------}
 
-class Function TBarrier.GetSharedDataLockSuffix: String;
-begin
-Result := WSO_BARR_SUFFIX_SHAREDDATA;
-end;
-
-//------------------------------------------------------------------------------
-
 procedure TBarrier.InitSharedData;
 begin
+inherited;
 fBarrierSharedData := PWSOBarrierSharedData(fSharedData);
 fBarrierSharedData^.MaxWaitCount := fCount;
 fBarrierSharedData^.WaitCount := 0;
@@ -2657,6 +2651,7 @@ end;
 
 procedure TBarrier.BindSharedData;
 begin
+inherited;
 fBarrierSharedData := PWSOBarrierSharedData(fSharedData);
 fCount := fBarrierSharedData^.MaxWaitCount;
 end;
@@ -2676,9 +2671,9 @@ begin
 If fProcessShared then
   begin
     CheckAndSetHandle(fEntryLock,
-      CreateEventW(nil,True,True,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_ENTRYLOCK))));
+      CreateEventW(nil,True,True,PWideChar(StrToWide(GetDecoratedName(WSO_BARR_SUFFIX_ENTRYLOCK)))));
     CheckAndSetHandle(fReleaseLock,
-      CreateEventW(nil,True,False,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_RELEASELOCK))));
+      CreateEventW(nil,True,False,PWideChar(StrToWide(GetDecoratedName(WSO_BARR_SUFFIX_RELEASELOCK)))));
   end
 else
   begin
@@ -2692,9 +2687,9 @@ end;
 procedure TBarrier.OpenLocks;
 begin
 CheckAndSetHandle(fEntryLock,
-  OpenEventW(SYNCHRONIZE or EVENT_MODIFY_STATE,False,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_ENTRYLOCK))));
+  OpenEventW(SYNCHRONIZE or EVENT_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_BARR_SUFFIX_ENTRYLOCK)))));
 CheckAndSetHandle(fReleaseLock,
-  OpenEventW(SYNCHRONIZE or EVENT_MODIFY_STATE,False,PWideChar(StrToWide(fName + WSO_BARR_SUFFIX_RELEASELOCK))));
+  OpenEventW(SYNCHRONIZE or EVENT_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_BARR_SUFFIX_RELEASELOCK)))));
 end;
 
 //------------------------------------------------------------------------------
@@ -2710,6 +2705,13 @@ end;
 class Function TBarrier.GetLockType: TWSOLockType;
 begin
 Result := ltBarrier;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TBarrier.GetNameSuffix: String;
+begin
+Result := WSO_BARR_SUFFIX;
 end;
 
 {-------------------------------------------------------------------------------
@@ -2899,10 +2901,10 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 const
-  WSO_COND_SUFFIX_SHAREDDATA = '@cnd_slk';
-  WSO_COND_SUFFIX_WAITLOCK   = '@cnd_wlk';
-  WSO_COND_SUFFIX_BDONELOCK  = '@cnd_blk';
-  WSO_COND_SUFFIX_DATALOCK   = '@cnd_dlk';
+  WSO_COND_SUFFIX = '@cnd_';
+
+  WSO_COND_SUFFIX_WAITLOCK   = 'wlk';
+  WSO_COND_SUFFIX_BDONELOCK  = 'blk';
 
 {===============================================================================
     TConditionVariable - class implementation
@@ -2910,15 +2912,8 @@ const
 {-------------------------------------------------------------------------------
     TConditionVariable - protected methods
 -------------------------------------------------------------------------------}
-(*
-class Function TConditionVariable.GetSharedDataLockSuffix: String;
-begin
-Result := WSO_COND_SUFFIX_SHAREDDATA;
-end;
 
-//------------------------------------------------------------------------------
-
-procedure TConditionVariable.AllocateSharedData;
+procedure TConditionVariable.InitSharedData;
 begin
 inherited;
 fCondSharedData := PWSOCondSharedData(fSharedData);
@@ -2926,15 +2921,23 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariable.FreeSharedData;
+procedure TConditionVariable.BindSharedData;
 begin
-fCondSharedData := nil;
 inherited;
+fCondSharedData := PWSOCondSharedData(fSharedData);
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariable.CreateLocks(SecurityAttributes: PSecurityAttributes);
+procedure TConditionVariable.DuplicateLocks(SourceObject: TComplexWinSyncObject);
+begin
+DuplicateAndSetHandle(fWaitLock,TConditionVariable(SourceObject).fWaitLock);
+DuplicateAndSetHandle(fBroadcastDoneLock,TConditionVariable(SourceObject).fBroadcastDoneLock);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariable.CreateLocks;
 begin
 If fProcessShared then
   begin
@@ -2947,42 +2950,47 @@ If fProcessShared then
     heretical code on Windows 40K, God Emperor of Mankind does not approve!
   }
     CheckAndSetHandle(fWaitLock,
-      CreateSemaphoreW(SecurityAttributes,0,DWORD($7FFFFFFF),PWideChar(StrToWide(fName + WSO_COND_SUFFIX_WAITLOCK))));
+      CreateSemaphoreW(nil,0,DWORD($7FFFFFFF),PWideChar(StrToWide(GetDecoratedName(WSO_COND_SUFFIX_WAITLOCK)))));
     CheckAndSetHandle(fBroadcastDoneLock,
-      CreateEventW(SecurityAttributes,True,False,PWideChar(StrToWide(fName + WSO_COND_SUFFIX_BDONELOCK))));
+      CreateEventW(nil,True,False,PWideChar(StrToWide(GetDecoratedName(WSO_COND_SUFFIX_BDONELOCK)))));
   end
 else
   begin
-    CheckAndSetHandle(fWaitLock,CreateSemaphoreW(SecurityAttributes,0,DWORD($7FFFFFFF),nil));
-    CheckAndSetHandle(fBroadcastDoneLock,CreateEventW(SecurityAttributes,True,False,nil));
+    CheckAndSetHandle(fWaitLock,CreateSemaphoreW(nil,0,DWORD($7FFFFFFF),nil));
+    CheckAndSetHandle(fBroadcastDoneLock,CreateEventW(nil,True,False,nil));
   end;
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariable.OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean);
+procedure TConditionVariable.OpenLocks;
 begin
 CheckAndSetHandle(fWaitLock,
-  OpenSemaphoreW(DesiredAccess or SEMAPHORE_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_COND_SUFFIX_WAITLOCK))));
+  OpenSemaphoreW(SYNCHRONIZE or SEMAPHORE_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_COND_SUFFIX_WAITLOCK)))));
 CheckAndSetHandle(fBroadcastDoneLock,
-  OpenEventW(DesiredAccess or EVENT_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_COND_SUFFIX_BDONELOCK))));
+  OpenEventW(SYNCHRONIZE or EVENT_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_COND_SUFFIX_BDONELOCK)))));
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariable.DuplicateLocks(SourceObject: TComplexWinSyncObject);
-begin
-fCondSharedData := PWSOCondSharedData(fSharedData);
-DuplicateAndSetHandle(fWaitLock,TConditionVariable(SourceObject).fWaitLock);
-DuplicateAndSetHandle(fBroadcastDoneLock,TConditionVariable(SourceObject).fBroadcastDoneLock);
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TConditionVariable.DestroyLocks;
+procedure TConditionVariable.CloseLocks;
 begin
 CloseHandle(fBroadcastDoneLock);
 CloseHandle(fWaitLock);
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TConditionVariable.GetLockType: TWSOLockType;
+begin
+Result := ltCondVar;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TConditionVariable.GetNameSuffix: String;
+begin
+Result := WSO_COND_SUFFIX;
 end;
 
 //------------------------------------------------------------------------------
@@ -2991,8 +2999,8 @@ Function TConditionVariable.DoOnPredicateCheck: Boolean;
 begin
 Result := False;
 If Assigned(fOnPredicateCheckEvent) then
-  fOnPredicateCheckEvent(Self,Result);
-If Assigned(fOnPredicateCheckCallback) then
+  fOnPredicateCheckEvent(Self,Result)
+else If Assigned(fOnPredicateCheckCallback) then
   fOnPredicateCheckCallback(Self,Result);
 end;
 
@@ -3004,8 +3012,8 @@ If Assigned(fOnDataAccessEvent) or Assigned(fOnDataAccessCallback) then
   begin
     Result := [];
     If Assigned(fOnDataAccessEvent) then
-      fOnDataAccessEvent(Self,Result);
-    If Assigned(fOnDataAccessCallback) then
+      fOnDataAccessEvent(Self,Result)
+    else If Assigned(fOnDataAccessCallback) then
       fOnDataAccessCallback(Self,Result);
   end
 else Result := [woWakeAll];
@@ -3028,8 +3036,8 @@ end;
     TConditionVariable - public methods
 -------------------------------------------------------------------------------}
 
-procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
-
+procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE);
+(*
   Function InternalWait(IsFirstWait: Boolean): Boolean;
   var
     WaitResult: DWORD;
@@ -3038,7 +3046,7 @@ procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE;
       WaitResult := SignalObjectAndWait(DataLock,fWaitLock,Timeout,Alertable)
     else
       WaitResult := WaitForSingleObjectEx(fWaitLock,Timeout,Alertable);
-    // note that we are waiting on semaphore, so abandoned is not a good result  
+    // note that we are waiting on semaphore, so abandoned is not a good result
     Result := WaitResult = WAIT_OBJECT_0{signaled};
     If WaitResult = WAIT_FAILED then
       raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep.InternalWait: Sleep failed (%d)',[GetLastError]);
@@ -3047,7 +3055,9 @@ procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE;
 var
   FirstWait:  Boolean;
   ExitWait:   Boolean;
+*)
 begin
+(*
 LockSharedData;
 try
   Inc(fCondSharedData^.WaitCount);
@@ -3091,22 +3101,24 @@ case WaitForSingleObject(DataLock,INFINITE) of
 else
   raise EWSOWaitError.Create('TConditionVariable.Sleep: Failed to lock data synchronizer.');
 end;
+*)
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-procedure TConditionVariable.Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+procedure TConditionVariable.Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE);
 begin
-If (DataLock is TEvent) or (DataLock is TMutex) or (DataLock is TSemaphore) then
-  Sleep(DataLock.Handle,Timeout,Alertable)
+If DataLock.GetLockType in [ltEvent,ltMutex,ltSemaphore] then
+  Sleep(DataLock.Handle,Timeout)
 else
-  raise EWSOInvalidObject.CreateFmt('TConditionVariable.Sleep: Unsupported data synchronizer object type (%s),',[DataLock.ClassName]);
+  raise EWSOInvalidObject.CreateFmt('TConditionVariable.Sleep: Unsupported data synchronizer type (%s),',[DataLock.ClassName]);
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TConditionVariable.Wake;
 begin
+(*
 LockSharedData;
 try
   If fCondSharedData^.WaitCount > 0 then
@@ -3119,6 +3131,7 @@ try
 finally
   UnlockSharedData;
 end;
+*)
 end;
 
 //------------------------------------------------------------------------------
@@ -3127,6 +3140,7 @@ procedure TConditionVariable.WakeAll;
 var
   Waiters:  Int32;
 begin
+(*
 LockSharedData;
 try
   Waiters := fCondSharedData^.WaitCount;
@@ -3152,15 +3166,16 @@ If Waiters > 0 then
   else
     raise EWSOWaitError.Create('TConditionVariable.WakeAll: Wait for broadcast failed.');
   end;
+*)
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariable.AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+procedure TConditionVariable.AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE);
 var
   WakeOptions:  TWSOWakeOptions;
 begin
-If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckEvent) then
+If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
   begin
     // lock synchronizer
     case WaitForSingleObject(DataLock,INFINITE) of
@@ -3169,7 +3184,7 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckEvent) then
         begin
           // test predicate and wait condition
           while not DoOnPredicateCheck do
-            Sleep(DataLock,Timeout,Alertable);
+            Sleep(DataLock,Timeout);
           // access protected data
           WakeOptions := DoOnDataAccess;
           // wake waiters before unlock
@@ -3192,17 +3207,18 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-procedure TConditionVariable.AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+procedure TConditionVariable.AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE);
 var
   WaitResult:   TWSOWaitResult;
   WakeOptions:  TWSOWakeOptions;
+  ErrorCode:    DWORD;
 begin
 If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
   begin
-    If (DataLock is TEvent) or (DataLock is TMutex) or (DataLock is TSemaphore) then
+    If DataLock.GetLockType in [ltEvent,ltMutex,ltSemaphore]  then
       begin
         // lock synchronizer
-        WaitResult := DataLock.WaitFor(INFINITE,False);
+        WaitResult := DataLock.WaitFor(INFINITE,ErrorCode,False);
         case WaitResult of
           wrSignaled,
           wrAbandoned:
@@ -3211,40 +3227,44 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
               begin
                 // test predicate and wait condition
                 while not DoOnPredicateCheck do
-                  Sleep(DataLock,Timeout,Alertable);
+                  Sleep(DataLock,Timeout);
                 // access protected data
                 WakeOptions := DoOnDataAccess;
                 // wake waiters before unlock
                 If (woWakeBeforeUnlock in WakeOptions) then
                   SelectWake(WakeOptions);
                 // unlock synchronizer
-                If DataLock is TEvent then
-                  TEvent(DataLock).SetEventStrict
-                else If DataLock is TMutex then
-                  TMutex(DataLock).ReleaseMutexStrict
-                else
-                  TSemaphore(DataLock).ReleaseSemaphoreStrict;
+                case DataLock.GetLockType of
+                  ltEvent:      TEvent(DataLock).SetEventStrict;
+                  ltMutex:      TMutex(DataLock).ReleaseMutexStrict;
+                  ltSemaphore:  TSemaphore(DataLock).ReleaseSemaphoreStrict;
+                end;
                 // wake waiters after unlock
                 If not(woWakeBeforeUnlock in WakeOptions) then
                   SelectWake(WakeOptions);
               end
             else raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Failed to lock data synchronizer.');
           wrError:
-            raise EWSOWaitError.CreateFmt('TConditionVariable.AutoCycle: Failed to lock data synchronizer (%d).',[DataLock.LastError]);
+            raise EWSOWaitError.CreateFmt('TConditionVariable.AutoCycle: Failed to lock data synchronizer (%d).',[ErrorCode]);
         else
           raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Failed to lock data synchronizer.');
         end;
       end
-    else raise EWSOInvalidObject.CreateFmt('TConditionVariable.AutoCycle: Unsupported data synchronizer object type (%s),',[DataLock.ClassName]);
+    else raise EWSOInvalidObject.CreateFmt('TConditionVariable.AutoCycle: Unsupported data synchronizer type (%s),',[DataLock.ClassName]);
   end;
 end;
 
-
+(*
 {===============================================================================
 --------------------------------------------------------------------------------
                               TConditionVariableEx
 --------------------------------------------------------------------------------
 ===============================================================================}
+const
+  WSO_CONDEX_SUFFIX = '@cde_';
+
+  WSO_CONDEX_SUFFIX_DATALOCK = 'dlk';
+  
 {===============================================================================
     TConditionVariableEx - class implementation
 ===============================================================================}
