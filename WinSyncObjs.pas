@@ -121,6 +121,7 @@ uses
 type
   EWSOException = class(Exception);
 
+  EWSOTimestampError         = class(EWSOException);
   EWSOTimeConversionError    = class(EWSOException);
   EWSOInitializationError    = class(EWSOException);
   EWSOHandleDuplicationError = class(EWSOException);
@@ -695,7 +696,7 @@ type
     TConditionVariable - class declaration
 ===============================================================================}
 type
-  TConditionVariable = class(TComplexWinSyncObject){$IFNDEF CompTest}{$message 'revisit'}{$ENDIF}
+  TConditionVariable = class(TComplexWinSyncObject)
   protected
     fWaitLock:                  THandle;  // semaphore, init 0, max $7FFFFFFF
     fBroadcastDoneLock:         THandle;  // manual-reset event, locked
@@ -748,40 +749,42 @@ type
     property OnDataAccessEvent: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;
     property OnDataAccess: TWSODataAccessEvent read fOnDataAccessEvent write fOnDataAccessEvent;
   end;
-(*
+
 {===============================================================================
 --------------------------------------------------------------------------------
                               TConditionVariableEx
 --------------------------------------------------------------------------------
 ===============================================================================}
 {
-  Only an extension of TConditionVariable with integrated data lock (use methods
-  Lock and Unlock to manipulate it). New versions of methods Sleep and AutoCycle
-  without the DataLock parameter are using the integrated data lock for that
-  purpose.
+  Only an extension of TConditionVariable with integrated data lock (use
+  methods Lock and Unlock to manipulate it). New versions of methods Sleep and
+  AutoCycle without the DataLock parameter are using the integrated data lock
+  for that purpose.
 
     WARNING - as in the case of TConditionVariable, be wary of how many times
-              you lock the integrated data lock. A mutex is used internally, so
-              mutliple locks can result in a deadlock in sleep method.
+              you lock the integrated data lock. A mutex is used internally,
+              so mutliple locks can result in a deadlock in sleep method.
 }
 {===============================================================================
     TConditionVariableEx - class declaration
 ===============================================================================}
 type
-  TConditionVariableEx = class(TConditionVariable){$IFNDEF CompTest}{$message 'revisit'}{$ENDIF}
+  TConditionVariableEx = class(TConditionVariable)
   protected
-    fDataLock:  THandle;  // mutex
-    procedure CreateLocks(SecurityAttributes: PSecurityAttributes); override;
-    procedure OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean); override;
+    fDataLock:  THandle;  // mutex, not owned
     procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
-    procedure DestroyLocks; override;    
+    procedure CreateLocks; override;
+    procedure OpenLocks; override;
+    procedure CloseLocks; override;
+    class Function GetLockType: TWSOLockType; override;
+    class Function GetNameSuffix: String; override;
   public
     procedure Lock; virtual;
     procedure Unlock; virtual;
-    procedure Sleep(Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual;
-    procedure AutoCycle(Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; // uses internal data synchronizer
+    procedure Sleep(Timeout: DWORD = INFINITE); overload; virtual;
+    procedure AutoCycle(Timeout: DWORD = INFINITE); overload; virtual;
   end;
-*)
+
 {===============================================================================
 --------------------------------------------------------------------------------
                                  TReadWriteLock
@@ -801,36 +804,45 @@ type
     RefCount:       Int32;
     ReadCount:      Int32;
     WriteWaitCount: Int32;
-    WriteCount:     Int32;
+    Writing:        Boolean;
   end;
   PWSORWLockSharedData = ^TWSORWLockSharedData;
-(*
+
 {===============================================================================
     TReadWriteLock - class declaration
 ===============================================================================}
 type
-  TReadWriteLock = class(TComplexWinSyncObject){$IFNDEF CompTest}{$message 'revisit'}{$ENDIF}
+  TReadWriteLock = class(TComplexWinSyncObject)
   protected
-    fReadLock:          THandle;    // manual-reset event
-    fWriteWaitLock:     THandle;    // manual-reset event
-    fWriteLock:         THandle;    // mutex
+    fReadLock:          THandle;    // manual-reset event, unlocked
+    fWriteQueueLock:    THandle;    // manual-reset event, unlocked
+    fWriteLock:         THandle;    // mutex, not owned
     fRWLockSharedData:  PWSORWLockSharedData;
-    class Function GetSharedDataLockSuffix: String; override;
-    // shared data management methods
-    procedure AllocateSharedData; override;
-    procedure FreeSharedData; override;
-    // locks management methods
-    procedure CreateLocks(SecurityAttributes: PSecurityAttributes); override;
-    procedure OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean); override;
+    procedure InitSharedData; override;
+    procedure BindSharedData; override;
     procedure DuplicateLocks(SourceObject: TComplexWinSyncObject); override;
-    procedure DestroyLocks; override;
+    procedure CreateLocks; override;
+    procedure OpenLocks; override;
+    procedure CloseLocks; override;
+    class Function GetLockType: TWSOLockType; override;
+    class Function GetNameSuffix: String; override;
   public
-    procedure ReadLock; virtual;
+  {
+    ReadLock can only return wrSignaled, wrTimeout or wrError (LastError will
+    contain the error code), treat any other returned value as an error (where
+    LastError does not contain a valid error code).
+
+      WARNING - the lock is acquired only when wrSignaled is returned!
+  }
+    Function ReadLock(Timeout: DWORD = INFINITE): TWSOWaitResult; virtual;
     procedure ReadUnlock; virtual;
-    procedure WriteLock; virtual;
+  {
+    See ReadLock for returned value and indication of successful lock acquire.
+  }
+    Function WriteLock(Timeout: DWORD = INFINITE): TWSOWaitResult; virtual;
     procedure WriteUnlock; virtual;
   end;
-*)
+
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -1075,24 +1087,6 @@ Function WaitForManyObjects(Objects: array of TSimpleWinSyncObject; WaitAll: Boo
 }
 Function WaitResultToStr(WaitResult: TWSOWaitResult): String;
 
-type
-  TReadWriteLock = class(TComplexWinSyncObject)
-  public
-    procedure ReadLock; virtual; abstract;
-    procedure ReadUnlock; virtual; abstract;
-    procedure WriteLock; virtual; abstract;
-    procedure WriteUnlock; virtual; abstract;
-  end;
-
-  TConditionVariableEx = class(TConditionVariable)
-  public
-    procedure Lock; virtual; abstract;
-    procedure Unlock; virtual; abstract;
-    procedure Sleep(Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
-    procedure AutoCycle(Timeout: DWORD = INFINITE; Alertable: Boolean = False); overload; virtual; abstract;
-  end;
-{$message '^^debug^^'}
-
 implementation
 
 uses
@@ -1109,6 +1103,9 @@ uses
 {===============================================================================
     Internals
 ===============================================================================}
+type
+  TWSOTimestamp = Int64;
+
 {$IF not Declared(UNICODE_STRING_MAX_CHARS)}
 const
   UNICODE_STRING_MAX_CHARS = 32767;
@@ -1125,6 +1122,63 @@ begin
 If Value then Result := BOOL(1)
   else Result := BOOL(0);
 end;
+
+//------------------------------------------------------------------------------
+
+Function GetTimestamp: TWSOTimestamp;
+begin
+Result := 0;
+If not QueryPerformanceCounter(Result) then
+  raise EWSOTimestampError.CreateFmt('GetTimestamp: Cannot obtain time stamp (%d).',[GetLastError]);
+Result := Result and $7FFFFFFFFFFFFFFF; // mask out sign bit
+end;
+
+//------------------------------------------------------------------------------
+
+Function RecalculateTimeout(TimeoutFull: UInt32; StartTime: TWSOTimestamp; out TimeoutRemaining: UInt32): Boolean;
+
+  Function GetElapsedMillis: UInt32;
+  var
+    CurrentTime:  TWSOTimestamp;
+    Temp:         Int64;
+  begin
+    CurrentTime := GetTimestamp;
+    If CurrentTime >= StartTime then
+      begin
+        Temp := 1;
+        If QueryPerformanceFrequency(Temp) then
+          Temp := Trunc(((CurrentTime - StartTime) / Temp) * 1000)
+        else
+          raise EWSOTimestampError.CreateFmt('RecalculateTimeout.GetElapsedMillis: Failed to obtain timer frequency (%d).',[GetLastError]);
+        If Temp < INFINITE then
+          Result := UInt32(Temp)
+        else
+          Result := INFINITE;
+      end
+    else Result := INFINITE;
+  end;
+
+var
+  ElapsedMillis:  UInt32;
+begin
+{
+  Result of true means the timeout did not run out, false means the timeout
+  period has elapsed.
+}
+case TimeoutFull of
+         0: TimeoutRemaining := 0;
+  INFINITE: TimeoutRemaining := INFINITE;
+else
+  // arbitrary timeout
+  ElapsedMillis := GetElapsedMillis;
+  If ElapsedMillis < TimeoutFull then
+    TimeoutRemaining := TimeoutFull - ElapsedMillis
+  else
+    TimeoutRemaining := 0;
+end;
+Result := TimeoutRemaining <> 0;
+end;
+
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -2570,50 +2624,50 @@ begin
   return (with result being true).
 }
 If fBarrierSharedData^.MaxWaitCount > 1 then
-begin
-  Result := False;
-  {
-    First try enter waiting on the barrier. If blocked it means the entry
-    semaphore is zero and a release is in progress.
-  }
-  case WaitForSingleObject(fEntryLock,INFINITE) of
-    WAIT_OBJECT_0:;
-    WAIT_FAILED:
-      raise EWSOWaitError.CreateFmt('TSimpleBarrier.Wait: Failed to enter barrier (%d).',[GetLastError]);
-  else
-    raise EWSOWaitError.Create('TSimpleBarrier.Wait: Failed to enter barrier.');
-  end;
-  // increment wait counter...
-  If InterlockedIncrement(fBarrierSharedData^.WaitCount) >= fBarrierSharedData^.MaxWaitCount then
-    begin
-      // ...barrier is full (fEntryLock should be locked by now), start releasing
-      If not SetEvent(fReleaseLock) then
-        raise EWSOEventError.CreateFmt('TSimpleBarrier.Wait: Failed to start release (%d).',[GetLastError]);
-      Result := True;
-    end
-  else
-    begin
-      // barrier not full, enter waiting for a release
-      case WaitForSingleObject(fReleaseLock,INFINITE) of
-        WAIT_OBJECT_0:;
-        WAIT_FAILED:
-          raise EWSOWaitError.CreateFmt('TSimpleBarrier.Wait: Failed release wait (%d).',[GetLastError]);
-      else
-        raise EWSOWaitError.Create('TSimpleBarrier.Wait: Failed release wait.');
+  begin
+    Result := False;
+    {
+      First do entry waiting on the barrier. If blocked, it means the entry
+      semaphore is zero and a release is in progress.
+    }
+    case WaitForSingleObject(fEntryLock,INFINITE) of
+      WAIT_OBJECT_0:;
+      WAIT_FAILED:
+        raise EWSOWaitError.CreateFmt('TSimpleBarrier.Wait: Failed to enter barrier (%d).',[GetLastError]);
+    else
+      raise EWSOWaitError.Create('TSimpleBarrier.Wait: Failed to enter barrier.');
+    end;
+    // increment wait counter...
+    If InterlockedIncrement(fBarrierSharedData^.WaitCount) >= fBarrierSharedData^.MaxWaitCount then
+      begin
+        // barrier is full (fEntryLock semaphore should be locked by now), start releasing
+        If not SetEvent(fReleaseLock) then
+          raise EWSOEventError.CreateFmt('TSimpleBarrier.Wait: Failed to start release (%d).',[GetLastError]);
+        Result := True;
+      end
+    else
+      begin
+        // barrier not full, enter waiting for a release
+        case WaitForSingleObject(fReleaseLock,INFINITE) of
+          WAIT_OBJECT_0:;
+          WAIT_FAILED:
+            raise EWSOWaitError.CreateFmt('TSimpleBarrier.Wait: Failed release wait (%d).',[GetLastError]);
+        else
+          raise EWSOWaitError.Create('TSimpleBarrier.Wait: Failed release wait.');
+        end;
       end;
-    end;
-  {
-    Now we are released, decrement wait counter and if it reaches zero, stop
-    release and unlock the entry semaphore to allow more waiters to enter the
-    barrier.
-  }
-  If InterlockedDecrement(fBarrierSharedData^.WaitCount) <= 0 then
-    begin
-      If not ResetEvent(fReleaseLock) then
-        raise EWSOEventError.CreateFmt('TSimpleBarrier.Wait: Failed to stop release (%d).',[GetLastError]);
-      If not ReleaseSemaphore(fEntryLock,fBarrierSharedData^.MaxWaitCount,nil) then
-        raise EWSOSemaphoreError.CreateFmt('TSimpleBarrier.Wait: Failed to unlock entry (%d).',[GetLastError]);
-    end;
+    {
+      Now we are released, decrement wait counter and if it reaches zero, stop
+      release and unlock the entry semaphore to allow more waiters to enter the
+      barrier.
+    }
+    If InterlockedDecrement(fBarrierSharedData^.WaitCount) <= 0 then
+      begin
+        If not ResetEvent(fReleaseLock) then
+          raise EWSOEventError.CreateFmt('TSimpleBarrier.Wait: Failed to stop release (%d).',[GetLastError]);
+        If not ReleaseSemaphore(fEntryLock,fBarrierSharedData^.MaxWaitCount,nil) then
+          raise EWSOSemaphoreError.CreateFmt('TSimpleBarrier.Wait: Failed to unlock entry (%d).',[GetLastError]);
+      end;
   end
 else Result := True;
 end;
@@ -2753,12 +2807,9 @@ end;
 
 Function TBarrier.Wait: Boolean;
 var
-  MaxWaitCount: Int32;
-  ExitWait:     Boolean;
+  ExitWait: Boolean;
 begin
-// to minimize access to shared memory...
-MaxWaitCount := fBarrierSharedData^.MaxWaitCount;
-If MaxWaitCount > 1 then
+If fBarrierSharedData^.MaxWaitCount > 1 then
   begin
     Result := False;
     repeat
@@ -2785,7 +2836,7 @@ If MaxWaitCount > 1 then
         begin
           // Releasing is currently not running.
           Inc(fBarrierSharedData^.WaitCount);
-          If fBarrierSharedData^.WaitCount >= MaxWaitCount then
+          If fBarrierSharedData^.WaitCount >= fBarrierSharedData^.MaxWaitCount then
             begin
             {
               Maximum number of waiting threads for this barrier has been
@@ -2904,7 +2955,7 @@ const
   WSO_COND_SUFFIX = '@cnd_';
 
   WSO_COND_SUFFIX_WAITLOCK   = 'wlk';
-  WSO_COND_SUFFIX_BDONELOCK  = 'blk';
+  WSO_COND_SUFFIX_BDONELOCK  = 'blk'; // broadcast done
 
 {===============================================================================
     TConditionVariable - class implementation
@@ -2917,6 +2968,10 @@ procedure TConditionVariable.InitSharedData;
 begin
 inherited;
 fCondSharedData := PWSOCondSharedData(fSharedData);
+fCondSharedData^.WaitCount := 0;
+fCondSharedData^.WakeCount := 0;
+fCondSharedData^.Broadcasting := False;
+ReadWriteBarrier;
 end;
 
 //------------------------------------------------------------------------------
@@ -3037,27 +3092,23 @@ end;
 -------------------------------------------------------------------------------}
 
 procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE);
-(*
-  Function InternalWait(IsFirstWait: Boolean): Boolean;
-  var
-    WaitResult: DWORD;
+var
+  StartTime:        TWSOTimestamp;
+  TimeoutRemaining: DWORD;
+  FirstWait:        Boolean;
+  ExitWait:         Boolean;
+
+  Function InternalWait: DWORD;
   begin
-    If IsFirstWait then
-      WaitResult := SignalObjectAndWait(DataLock,fWaitLock,Timeout,Alertable)
+    If FirstWait then
+      Result := SignalObjectAndWait(DataLock,fWaitLock,TimeoutRemaining,False)
     else
-      WaitResult := WaitForSingleObjectEx(fWaitLock,Timeout,Alertable);
-    // note that we are waiting on semaphore, so abandoned is not a good result
-    Result := WaitResult = WAIT_OBJECT_0{signaled};
-    If WaitResult = WAIT_FAILED then
-      raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep.InternalWait: Sleep failed (%d)',[GetLastError]);
+      Result := WaitForSingleObject(fWaitLock,TimeoutRemaining);
   end;
 
-var
-  FirstWait:  Boolean;
-  ExitWait:   Boolean;
-*)
 begin
-(*
+StartTime := GetTimestamp;
+TimeoutRemaining := Timeout;
 LockSharedData;
 try
   Inc(fCondSharedData^.WaitCount);
@@ -3067,30 +3118,39 @@ end;
 FirstWait := True;
 ExitWait := False;
 repeat
-  If InternalWait(FirstWait) then
-    begin
-      LockSharedData;
-      try
-        If fCondSharedData^.WakeCount > 0 then
-          begin
-            Dec(fCondSharedData^.WakeCount);
-            If fCondSharedData^.Broadcasting and (fCondSharedData^.WakeCount <= 0) then
-              begin
-                fCondSharedData^.WakeCount := 0;
-                fCondSharedData^.Broadcasting := False;
-                If not SetEvent(fBroadcastDoneLock) then
-                  raise EWSOEventError.CreateFmt('TConditionVariable.Sleep: Failed to set broadcast-done-lock event (%d).',[GetLastError]);
-              end;
-            ExitWait := True; // normal wakeup               
-          end;
-        // if the WakeCount was 0, then re-enter waiting
-        {$IFNDEF CompTest}{$message 'recalculate timeout'}{$ENDIF}
-      finally
-        UnlockSharedData;
+  case InternalWait of
+    WAIT_OBJECT_0:{signaled}
+      begin
+        LockSharedData;
+        try
+          If fCondSharedData^.WakeCount > 0 then
+            begin
+              // waking
+              Dec(fCondSharedData^.WakeCount);
+              If fCondSharedData^.Broadcasting and (fCondSharedData^.WakeCount <= 0) then
+                begin
+                  // broadcasting and this waiter is last, end broadcast
+                  fCondSharedData^.WakeCount := 0;
+                  fCondSharedData^.Broadcasting := False;
+                  If not SetEvent(fBroadcastDoneLock) then
+                    raise EWSOEventError.CreateFmt('TConditionVariable.Sleep: Failed to end broadcast (%d).',[GetLastError]);
+                end;
+              ExitWait := True; // normal wakeup
+            end
+          // not waking, re-enter waiting (recalcualte timeout)
+          else If not RecalculateTimeout(Timeout,StartTime,TimeoutRemaining) then
+            ExitWait := True;
+        finally
+          UnlockSharedData;
+        end;
       end;
-    end
-  else ExitWait := True;  // timeout or spurious wakeup (eg. APC)
-  FirstWait := False;     // in case the cycle repeats and re-enters waiting (so the DataLock is not signaled again)
+    WAIT_FAILED:
+      raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep: Wait failed (%d)',[GetLastError]);
+  else
+    // timeout or spurious wakeup (eg. APC)
+    ExitWait := True;
+  end;
+  FirstWait := False; // in case the cycle repeats and re-enters waiting (so the DataLock is not signaled again)
 until ExitWait;
 // lock the DataLock synchronizer
 case WaitForSingleObject(DataLock,INFINITE) of
@@ -3101,7 +3161,6 @@ case WaitForSingleObject(DataLock,INFINITE) of
 else
   raise EWSOWaitError.Create('TConditionVariable.Sleep: Failed to lock data synchronizer.');
 end;
-*)
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -3118,20 +3177,23 @@ end;
 
 procedure TConditionVariable.Wake;
 begin
-(*
 LockSharedData;
 try
   If fCondSharedData^.WaitCount > 0 then
     begin
+    {
+      Wait count must be decremented here, because if it would be done by the
+      waiter, there is a chance of another wake before the waiter get a chance
+      to do the decrement. This would create a discrepancy in counters.
+    }
       Dec(fCondSharedData^.WaitCount);
       Inc(fCondSharedData^.WakeCount);
       If not ReleaseSemaphore(fWaitLock,1,nil) then
-        raise EWSOSemaphoreError.CreateFmt('TConditionVariable.Wake: Failed to release wait-lock semaphore (%d).',[GetLastError]);
+        raise EWSOSemaphoreError.CreateFmt('TConditionVariable.Wake: Release failed (%d).',[GetLastError]);
     end;
 finally
   UnlockSharedData;
 end;
-*)
 end;
 
 //------------------------------------------------------------------------------
@@ -3140,7 +3202,6 @@ procedure TConditionVariable.WakeAll;
 var
   Waiters:  Int32;
 begin
-(*
 LockSharedData;
 try
   Waiters := fCondSharedData^.WaitCount;
@@ -3150,10 +3211,10 @@ try
       Inc(fCondSharedData^.WakeCount,Waiters);
       If not fCondSharedData^.Broadcasting then
         If not ResetEvent(fBroadcastDoneLock) then
-          raise EWSOEventError.CreateFmt('TConditionVariable.WakeAll: Failed to reset broadcast-done-lock event (%d).',[GetLastError]);
+          raise EWSOEventError.CreateFmt('TConditionVariable.WakeAll: Failed to start broadcast (%d).',[GetLastError]);
       fCondSharedData^.Broadcasting := True;
       If not ReleaseSemaphore(fWaitLock,Waiters,nil) then
-        raise EWSOSemaphoreError.CreateFmt('TConditionVariable.WakeAll: Failed to release wait-lock semaphore (%d).',[GetLastError]);
+        raise EWSOSemaphoreError.CreateFmt('TConditionVariable.WakeAll: Release failed (%d).',[GetLastError]);
     end;
 finally
   UnlockSharedData;
@@ -3162,11 +3223,10 @@ If Waiters > 0 then
   case WaitForSingleObject(fBroadcastDoneLock,INFINITE) of
     WAIT_OBJECT_0:;
     WAIT_FAILED:
-      raise EWSOWaitError.CreateFmt('TConditionVariable.WakeAll: Wait for broadcast failed (%d).',[GetLastError]);
+      raise EWSOWaitError.CreateFmt('TConditionVariable.WakeAll: Broadcast wait failed (%d).',[GetLastError]);
   else
-    raise EWSOWaitError.Create('TConditionVariable.WakeAll: Wait for broadcast failed.');
+    raise EWSOWaitError.Create('TConditionVariable.WakeAll: Broadcast wait failed.');
   end;
-*)
 end;
 
 //------------------------------------------------------------------------------
@@ -3254,7 +3314,7 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
   end;
 end;
 
-(*
+
 {===============================================================================
 --------------------------------------------------------------------------------
                               TConditionVariableEx
@@ -3272,26 +3332,6 @@ const
     TConditionVariableEx - public methods
 -------------------------------------------------------------------------------}
 
-procedure TConditionVariableEx.CreateLocks(SecurityAttributes: PSecurityAttributes);
-begin
-inherited CreateLocks(SecurityAttributes);
-If fProcessShared then
-  CheckAndSetHandle(fDataLock,CreateMutexW(SecurityAttributes,RectBool(False),PWideChar(StrToWide(fName + WSO_COND_SUFFIX_DATALOCK))))
-else
-  CheckAndSetHandle(fDataLock,CreateMutexW(SecurityAttributes,RectBool(False),nil));
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TConditionVariableEx.OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean);
-begin
-inherited OpenLocks(DesiredAccess,InheritHandle);
-CheckAndSetHandle(fDataLock,
-  OpenMutexW(DesiredAccess or MUTEX_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_COND_SUFFIX_DATALOCK))));
-end;
-
-//------------------------------------------------------------------------------
-
 procedure TConditionVariableEx.DuplicateLocks(SourceObject: TComplexWinSyncObject);
 begin
 inherited DuplicateLocks(SourceObject);
@@ -3300,10 +3340,44 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariableEx.DestroyLocks;
+procedure TConditionVariableEx.CreateLocks;
 begin
-inherited;
+inherited CreateLocks;
+If fProcessShared then
+  CheckAndSetHandle(fDataLock,CreateMutexW(nil,RectBool(False),PWideChar(StrToWide(GetDecoratedName(WSO_CONDEX_SUFFIX_DATALOCK)))))
+else
+  CheckAndSetHandle(fDataLock,CreateMutexW(nil,RectBool(False),nil));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariableEx.OpenLocks;
+begin
+inherited OpenLocks;
+CheckAndSetHandle(fDataLock,
+  OpenMutexW(SYNCHRONIZE or MUTEX_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_CONDEX_SUFFIX_DATALOCK)))));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TConditionVariableEx.CloseLocks;
+begin
 CloseHandle(fDataLock);
+inherited;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TConditionVariableEx.GetLockType: TWSOLockType;
+begin
+Result := ltCondVarEx;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TConditionVariableEx.GetNameSuffix: String;
+begin
+Result := WSO_CONDEX_SUFFIX;
 end;
 
 {-------------------------------------------------------------------------------
@@ -3332,16 +3406,16 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariableEx.Sleep(Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+procedure TConditionVariableEx.Sleep(Timeout: DWORD = INFINITE);
 begin
-Sleep(fDataLock,Timeout,Alertable);
+Sleep(fDataLock,Timeout);
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariableEx.AutoCycle(Timeout: DWORD = INFINITE; Alertable: Boolean = False);
+procedure TConditionVariableEx.AutoCycle(Timeout: DWORD = INFINITE);
 begin
-AutoCycle(fDataLock,Timeout,Alertable);
+AutoCycle(fDataLock,Timeout);
 end;
 
 
@@ -3351,10 +3425,11 @@ end;
 --------------------------------------------------------------------------------
 ===============================================================================}
 const
-  WSO_RWLOCK_SUFFIX_SHAREDDATA    = '@rwl_slk';
-  WSO_RWLOCK_SUFFIX_READLOCK      = '@rwl_rlk';
-  WSO_RWLOCK_SUFFIX_WRITEWAITLOCK = '@rwl_alk';
-  WSO_RWLOCK_SUFFIX_WRITELOCK     = '@rwl_wlk';
+  WSO_RWLOCK_SUFFIX = '@rwl_';
+
+  WSO_RWLOCK_SUFFIX_READLOCK       = 'rlk';
+  WSO_RWLOCK_SUFFIX_WRITEQUEUELOCK = 'qlk';
+  WSO_RWLOCK_SUFFIX_WRITELOCK      = 'wlk';
 
 {===============================================================================
     TReadWriteLock - class implementation
@@ -3363,108 +3438,135 @@ const
     TReadWriteLock - protected methods
 -------------------------------------------------------------------------------}
 
-class Function TReadWriteLock.GetSharedDataLockSuffix: String;
-begin
-Result := WSO_RWLOCK_SUFFIX_SHAREDDATA;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TReadWriteLock.AllocateSharedData;
+procedure TReadWriteLock.InitSharedData;
 begin
 inherited;
 fRWLockSharedData := PWSORWLockSharedData(fSharedData);
+fRWLockSharedData^.ReadCount := 0;
+fRWLockSharedData^.WriteWaitCount := 0;
+fRWLockSharedData^.Writing := False;
+ReadWriteBarrier;
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TReadWriteLock.FreeSharedData;
+procedure TReadWriteLock.BindSharedData;
 begin
-fRWLockSharedData := nil;
 inherited;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TReadWriteLock.CreateLocks(SecurityAttributes: PSecurityAttributes);
-begin
-If fProcessShared then
-  begin
-    CheckAndSetHandle(fReadLock,
-      CreateEventW(SecurityAttributes,True,True,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_READLOCK))));
-    CheckAndSetHandle(fWriteWaitLock,
-      CreateEventW(SecurityAttributes,True,True,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITEWAITLOCK))));
-    CheckAndSetHandle(fWriteLock,
-      CreateMutexW(SecurityAttributes,False,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITELOCK))));
-  end
-else
-  begin
-    CheckAndSetHandle(fReadLock,CreateEventW(SecurityAttributes,True,True,nil));
-    CheckAndSetHandle(fWriteWaitLock,CreateEventW(SecurityAttributes,True,True,nil));
-    CheckAndSetHandle(fWriteLock,CreateMutexW(SecurityAttributes,False,nil));
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TReadWriteLock.OpenLocks(DesiredAccess: DWORD; InheritHandle: Boolean);
-begin
-CheckAndSetHandle(fReadLock,
-  OpenEventW(DesiredAccess or EVENT_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_READLOCK))));
-CheckAndSetHandle(fWriteWaitLock,
-  OpenEventW(DesiredAccess or EVENT_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITEWAITLOCK))));
-CheckAndSetHandle(fWriteLock,
-  OpenMutexW(DesiredAccess or MUTEX_MODIFY_STATE,InheritHandle,PWideChar(StrToWide(fName + WSO_RWLOCK_SUFFIX_WRITELOCK))));
+fRWLockSharedData := PWSORWLockSharedData(fSharedData);
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TReadWriteLock.DuplicateLocks(SourceObject: TComplexWinSyncObject);
 begin
-fRWLockSharedData := PWSORWLockSharedData(fSharedData);
 DuplicateAndSetHandle(fReadLock,TReadWriteLock(SourceObject).fReadLock);
-DuplicateAndSetHandle(fWriteWaitLock,TReadWriteLock(SourceObject).fWriteWaitLock);
+DuplicateAndSetHandle(fWriteQueueLock,TReadWriteLock(SourceObject).fWriteQueueLock);
 DuplicateAndSetHandle(fWriteLock,TReadWriteLock(SourceObject).fWriteLock);
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TReadWriteLock.DestroyLocks;
+procedure TReadWriteLock.CreateLocks;
+begin
+If fProcessShared then
+  begin
+    CheckAndSetHandle(fReadLock,
+      CreateEventW(nil,True,True,PWideChar(StrToWide(GetDecoratedName(WSO_RWLOCK_SUFFIX_READLOCK)))));
+    CheckAndSetHandle(fWriteQueueLock,
+      CreateEventW(nil,True,True,PWideChar(StrToWide(GetDecoratedName(WSO_RWLOCK_SUFFIX_WRITEQUEUELOCK)))));
+    CheckAndSetHandle(fWriteLock,
+      CreateMutexW(nil,RectBool(False),PWideChar(StrToWide(GetDecoratedName(WSO_RWLOCK_SUFFIX_WRITELOCK)))));
+  end
+else
+  begin
+    CheckAndSetHandle(fReadLock,CreateEventW(nil,True,True,nil));
+    CheckAndSetHandle(fWriteQueueLock,CreateEventW(nil,True,True,nil));
+    CheckAndSetHandle(fWriteLock,CreateMutexW(nil,RectBool(False),nil));
+  end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.OpenLocks;
+begin
+CheckAndSetHandle(fReadLock,
+  OpenEventW(SYNCHRONIZE or EVENT_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_RWLOCK_SUFFIX_READLOCK)))));
+CheckAndSetHandle(fWriteQueueLock,
+  OpenEventW(SYNCHRONIZE or EVENT_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_RWLOCK_SUFFIX_WRITEQUEUELOCK)))));
+CheckAndSetHandle(fWriteLock,
+  OpenMutexW(SYNCHRONIZE or MUTEX_MODIFY_STATE,False,PWideChar(StrToWide(GetDecoratedName(WSO_RWLOCK_SUFFIX_WRITELOCK)))));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TReadWriteLock.CloseLocks;
 begin
 CloseHandle(fWriteLock);
-CloseHandle(fWriteWaitLock);
+CloseHandle(fWriteQueueLock);
 CloseHandle(fReadLock);
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TReadWriteLock.GetLockType: TWSOLockType;
+begin
+Result := ltRWLock;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TReadWriteLock.GetNameSuffix: String;
+begin
+Result := WSO_RWLOCK_SUFFIX;
 end;
 
 {-------------------------------------------------------------------------------
     TReadWriteLock - public methods
 -------------------------------------------------------------------------------}
 
-procedure TReadWriteLock.ReadLock;
+Function TReadWriteLock.ReadLock(Timeout: DWORD = INFINITE): TWSOWaitResult;
 var
-  ExitWait: Boolean;
+  StartTime:        TWSOTimestamp;
+  TimeoutRemaining: DWORD;
+  ExitWait:         Boolean;
 begin
-ExitWait := False;
+StartTime := GetTimestamp;
+TimeoutRemaining := Timeout;
 repeat
-  case WaitForSingleObject(fReadLock,INFINITE) of
-    WAIT_OBJECT_0:;
-    WAIT_FAILED:
-      raise EWSOWaitError.CreateFmt('TReadWriteLock.ReadLock: Failed waiting on read lock (%d).',[GetLastError]);
-  else
-    raise EWSOWaitError.Create('TReadWriteLock.ReadLock: Failed waiting on read lock.');
-  end;
-  LockSharedData;
-  try
-    If (fRWLockSharedData^.WriteWaitCount <= 0) and (fRWLockSharedData^.WriteCount <= 0) then
+  ExitWait := True;
+  Result := wrError;
+  case WaitForSingleObject(fReadLock,TimeoutRemaining) of
+    WAIT_OBJECT_0:
       begin
-        Inc(fRWLockSharedData^.ReadCount);
-        If not ResetEvent(fWriteWaitLock) then
-          raise EWSOEventError.CreateFmt('TReadWriteLock.ReadLock: Failed to reset write-wait-lock event (%d).',[GetLastError]);
-        ExitWait := True;
-      end
-    else ExitWait := False;
-  finally
-    UnlockSharedData;
+        LockSharedData;
+        try
+          If (fRWLockSharedData^.WriteWaitCount <= 0) and not fRWLockSharedData^.Writing then
+            begin
+              // nobody is writing or waiting for write, we can enter reading
+              Inc(fRWLockSharedData^.ReadCount);
+              If not ResetEvent(fWriteQueueLock) then
+                raise EWSOEventError.CreateFmt('TReadWriteLock.ReadLock: Failed to lock write queue (%d).',[GetLastError]);
+              Result := wrSignaled;  
+            end
+          else
+            begin
+              // someone is either writing or waiting for write, recalculate timeout and perhaps re-enter waiting
+              If RecalculateTimeout(Timeout,StartTime,TimeoutRemaining) then
+                ExitWait := False
+              else
+                Result := wrTimeout;
+            end;
+        finally
+          UnlockSharedData;
+        end;
+      end;
+    WAIT_TIMEOUT:
+      Result := wrTimeout;
+    WAIT_FAILED:
+      fLastError := GetLastError;
+  else
+    raise EWSOWaitError.Create('TReadWriteLock.ReadLock: Read wait failed.');
   end;
 until ExitWait;
 end;
@@ -3477,8 +3579,8 @@ LockSharedData;
 try
   Dec(fRWLockSharedData^.ReadCount);
   If fRWLockSharedData^.ReadCount <= 0 then
-    If not SetEvent(fWriteWaitLock) then
-      raise EWSOEventError.CreateFmt('TReadWriteLock.ReadUnlock: Failed to set write-wait-lock event (%d).',[GetLastError]);
+    If not SetEvent(fWriteQueueLock) then
+      raise EWSOEventError.CreateFmt('TReadWriteLock.ReadUnlock: Failed to unlock write queue (%d).',[GetLastError]);
 finally
   UnlockSharedData;
 end;
@@ -3486,39 +3588,70 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TReadWriteLock.WriteLock;
+Function TReadWriteLock.WriteLock(Timeout: DWORD = INFINITE): TWSOWaitResult;
+var
+  StartTime:        TWSOTimestamp;
+  TimeoutRemaining: DWORD;
 begin
+StartTime := GetTimestamp;
+TimeoutRemaining := Timeout;
+// enter write queue - this prevents any new reader to acquire read lock
 LockSharedData;
 try
   Inc(fRWLockSharedData^.WriteWaitCount);
   If not ResetEvent(fReadLock) then
-    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteLock: Failed to reset raad-lock event (%d).',[GetLastError]);
+    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteLock: Failed to lock reading (%d).',[GetLastError]);
 finally
   UnlockSharedData;
 end;
-case WaitForSingleObject(fWriteWaitLock,INFINITE) of
-  WAIT_OBJECT_0:;
-  WAIT_FAILED:
-    raise EWSOWaitError.CreateFmt('TReadWriteLock.WriteLock: Failed waiting on write-wait lock (%d).',[GetLastError]);
-else
-  raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Failed waiting on write-wait lock.');
-end;
-case WaitForSingleObject(fWriteLock,INFINITE) of
-  WAIT_OBJECT_0,
-  WAIT_ABANDONED_0:;
-  WAIT_FAILED:
-    raise EWSOWaitError.CreateFmt('TReadWriteLock.WriteLock: Failed waiting on write lock (%d).',[GetLastError]);
-else
-  raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Failed waiting on write lock.');
-end;
-LockSharedData;
 try
-  If not ResetEvent(fWriteWaitLock) then
-    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteLock: Failed to reset write-wait-lock event (%d).',[GetLastError]);
-  Dec(fRWLockSharedData^.WriteWaitCount);
-  Inc(fRWLockSharedData^.WriteCount);
+  Result := wrError;
+  // the following will block while there is any active reader
+  case WaitForSingleObject(fWriteQueueLock,TimeoutRemaining) of
+    WAIT_OBJECT_0:
+      begin
+        RecalculateTimeout(Timeout,StartTime,TimeoutRemaining);
+        // there is no reader now, try enter writing (note that abandoned is not a good result)
+        case WaitForSingleObject(fWriteLock,TimeoutRemaining) of
+          WAIT_OBJECT_0:
+            begin
+              // we have the write lock now
+              LockSharedData;
+              try
+                // locking the write wait will prevent recursive write locking
+                If not ResetEvent(fWriteQueueLock) then
+                  raise EWSOEventError.CreateFmt('TReadWriteLock.WriteLock: Failed to lock write queue (%d).',[GetLastError]);
+                fRWLockSharedData^.Writing := True;
+                Result := wrSignaled;
+              finally
+                UnlockSharedData;
+              end;
+            end;
+          WAIT_TIMEOUT:
+            Result := wrTimeout;
+          WAIT_FAILED:
+            fLastError := GetLastError;
+        else
+          raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Write wait failed.');
+        end;
+      end;
+    WAIT_TIMEOUT:
+      Result := wrTimeout;
+    WAIT_FAILED:
+      fLastError := GetLastError;
+  else
+    raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Write queue wait failed.');
+  end;
 finally
-  UnlockSharedData;
+  LockSharedData;
+  try
+    Dec(fRWLockSharedData^.WriteWaitCount);
+    If (fRWLockSharedData^.WriteWaitCount <= 0) and not fRWLockSharedData^.Writing then
+      If not SetEvent(fReadLock) then
+        raise EWSOEventError.CreateFmt('TReadWriteLock.WriteLock: Failed to unlock reading (%d).',[GetLastError]);
+  finally
+    UnlockSharedData;
+  end;
 end;
 end;
 
@@ -3528,19 +3661,21 @@ procedure TReadWriteLock.WriteUnlock;
 begin
 LockSharedData;
 try
-  Dec(fRWLockSharedData^.WriteCount);
+  fRWLockSharedData^.Writing := False;
   If not ReleaseMutex(fWriteLock) then
-    raise EWSOMutexError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to release write-lock mutex (%d).',[GetLastError]);
+    raise EWSOMutexError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to unlock writing (%d).',[GetLastError]);
+  // no need to check for readers count, if we had write lock there can be none
+  If not SetEvent(fWriteQueueLock) then
+    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to unlock write queue (%d).',[GetLastError]);
+  // if there is no thread waiting for write, allow readers to acquire their read locks
   If fRWLockSharedData^.WriteWaitCount <= 0 then
     If not SetEvent(fReadLock) then
-      raise EWSOEventError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to set read-lock event (%d).',[GetLastError]);
-  If not SetEvent(fWriteWaitLock) then
-    raise EWSOEventError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to set write-wait-lock event (%d).',[GetLastError]);
+      raise EWSOEventError.CreateFmt('TReadWriteLock.WriteUnlock: Failed to unlock reading (%d).',[GetLastError]);
 finally
   UnlockSharedData;
 end;
 end;
-*)
+
 
 {===============================================================================
 --------------------------------------------------------------------------------
@@ -3556,7 +3691,7 @@ const
   MWMO_INPUTAVAILABLE = DWORD($00000004);
 
 const
-  MAXIMUM_WAIT_OBJECTS = 3; {$IFNDEF CompTest}{$message 'debug (should be 64)'}{$ENDIF}
+  MAXIMUM_WAIT_OBJECTS = 3; {$IFNDEF CompTest}{$message 'debug (remove)'}{$ENDIF}
 
 {===============================================================================
     Wait functions - internal functions
@@ -3639,7 +3774,7 @@ If (Count > 0) and (Count <= RectifiedMaxWaitCount(MsgWaitOptions)) then
               Index := Integer(WaitResult - WAIT_ABANDONED_0);
           end
         else raise EWSOMultiWaitError.CreateFmt('WaitForMultipleHandles_Sys: ' +
-          'Invalid wait result (abandoned + %d @ %d).',[Integer(WaitResult - WAIT_ABANDONED_0),Count]);
+          'Invalid wait result (abandoned + %d (%d)).',[Integer(WaitResult - WAIT_ABANDONED_0),Count]);
       WAIT_IO_COMPLETION:
         Result := wrIOCompletion;
       WAIT_TIMEOUT:
