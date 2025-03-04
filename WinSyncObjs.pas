@@ -37,11 +37,11 @@
       WARNING - waiting on many objects should also be considered an
                 experimental implementation.
 
-  Version 1.2.1 (2024-05-03)
+  Version 1.2.2 (2025-03-04)
 
-  Last change 2024-09-09
+  Last change 2025-03-04
 
-  ©2016-2024 František Milt
+  ©2016-2025 František Milt
 
   Contacts:
     František Milt: frantisek.milt@gmail.com
@@ -2018,7 +2018,7 @@ end;
 const
   WSO_CPLX_SHARED_NAMESPACE = 'wso_shared';
 
-  WSO_CPLX_SUFFIX_LENGTH = 8; // all suffixes must have the same length
+  WSO_CPLX_SUFFIX_LENGTH = 8; // all suffixes must have the same length (8 is correct!)
 
 const
   WSO_CPLX_SUFFIX_SHAREDDATA     = 'shr';
@@ -2121,8 +2121,9 @@ begin
 case fSharedDataLock.LockType of
   sltSection: fSharedDataLock.ThreadSharedLock.Enter;
   sltMutex:   case WaitForSingleObject(fSharedDataLock.ProcessSharedLock,INFINITE) of
-                WAIT_OBJECT_0,
-                WAIT_ABANDONED:;  // good result, do nothing
+                WAIT_OBJECT_0:;   // good result, do nothing
+                WAIT_ABANDONED:
+                  raise EWSOWaitError.Create('TComplexWinSyncObject.LockSharedData: Mutex owner died, shared data can be damaged.');
                 WAIT_FAILED:
                   raise EWSOWaitError.CreateFmt('TComplexWinSyncObject.LockSharedData: Data lock not acquired (%d).',[GetLastError]);
               else
@@ -3159,8 +3160,9 @@ repeat
 until ExitWait;
 // lock the DataLock synchronizer
 case WaitForSingleObject(DataLock,INFINITE) of
-  WAIT_OBJECT_0,
-  WAIT_ABANDONED:;
+  WAIT_OBJECT_0:;
+  WAIT_ABANDONED:
+    raise EWSOWaitError.Create('TConditionVariable.Sleep: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
   WAIT_FAILED:
     raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep: Failed to lock data synchronizer (%d).',[GetLastError]);
 else
@@ -3244,8 +3246,7 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
   begin
     // lock synchronizer
     case WaitForSingleObject(DataLock,INFINITE) of
-      WAIT_OBJECT_0,
-      WAIT_ABANDONED:
+      WAIT_OBJECT_0:
         begin
           // test predicate and wait condition
           while not DoOnPredicateCheck do
@@ -3262,6 +3263,8 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
           If not(woWakeBeforeUnlock in WakeOptions) then
             SelectWake(WakeOptions);
         end;
+      WAIT_ABANDONED:
+        raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
       WAIT_FAILED:
         raise EWSOWaitError.CreateFmt('TConditionVariable.AutoCycle: Failed to lock data synchronizer (%d).',[GetLastError]);
     else
@@ -3285,30 +3288,28 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
         // lock synchronizer
         WaitResult := DataLock.WaitFor(INFINITE,ErrorCode,False);
         case WaitResult of
-          wrSignaled,
+          wrSignaled:
+            begin
+              // test predicate and wait condition
+              while not DoOnPredicateCheck do
+                Sleep(DataLock,Timeout);
+              // access protected data
+              WakeOptions := DoOnDataAccess;
+              // wake waiters before unlock
+              If (woWakeBeforeUnlock in WakeOptions) then
+                SelectWake(WakeOptions);
+              // unlock synchronizer
+              case DataLock.GetLockType of
+                ltEvent:      TEvent(DataLock).SetEventStrict;
+                ltMutex:      TMutex(DataLock).ReleaseMutexStrict;
+                ltSemaphore:  TSemaphore(DataLock).ReleaseSemaphoreStrict;
+              end;
+              // wake waiters after unlock
+              If not(woWakeBeforeUnlock in WakeOptions) then
+                SelectWake(WakeOptions);
+            end;
           wrAbandoned:
-            // abandoned is allowed only for mutexes
-            If (WaitResult <> wrAbandoned) or (DataLock is TMutex) then
-              begin
-                // test predicate and wait condition
-                while not DoOnPredicateCheck do
-                  Sleep(DataLock,Timeout);
-                // access protected data
-                WakeOptions := DoOnDataAccess;
-                // wake waiters before unlock
-                If (woWakeBeforeUnlock in WakeOptions) then
-                  SelectWake(WakeOptions);
-                // unlock synchronizer
-                case DataLock.GetLockType of
-                  ltEvent:      TEvent(DataLock).SetEventStrict;
-                  ltMutex:      TMutex(DataLock).ReleaseMutexStrict;
-                  ltSemaphore:  TSemaphore(DataLock).ReleaseSemaphoreStrict;
-                end;
-                // wake waiters after unlock
-                If not(woWakeBeforeUnlock in WakeOptions) then
-                  SelectWake(WakeOptions);
-              end
-            else raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Failed to lock data synchronizer.');
+            raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
           wrError:
             raise EWSOWaitError.CreateFmt('TConditionVariable.AutoCycle: Failed to lock data synchronizer (%d).',[ErrorCode]);
         else
@@ -3392,8 +3393,9 @@ end;
 procedure TConditionVariableEx.Lock;
 begin
 case WaitForSingleObject(fDataLock,INFINITE) of
-  WAIT_OBJECT_0,
-  WAIT_ABANDONED:;
+  WAIT_OBJECT_0:;
+  WAIT_ABANDONED:
+    raise EWSOWaitError.Create('TConditionVariableEx.Lock: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
   WAIT_FAILED:
     raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to lock data synchronizer (%d).',[GetLastError]);
 else
@@ -3632,6 +3634,8 @@ try
                 UnlockSharedData;
               end;
             end;
+          WAIT_ABANDONED:
+            raise EWSOWaitError.Create('TReadWriteLock.WriteLock: Write lock (mutex) owner died, state can be damaged.');
           WAIT_TIMEOUT:
             Result := wrTimeout;
           WAIT_FAILED:
