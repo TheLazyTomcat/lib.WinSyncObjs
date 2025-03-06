@@ -37,9 +37,9 @@
       WARNING - waiting on many objects should also be considered an
                 experimental implementation.
 
-  Version 1.2.2 (2025-03-04)
+  Version 1.2.2 (2025-03-06)
 
-  Last change 2025-03-04
+  Last change 2025-03-06
 
   ©2016-2025 František Milt
 
@@ -737,8 +737,8 @@ type
     In both overloads, DataLock parameter can only be an event, mutex or
     semaphore, no other type of synchronizer is supported.
   }
-    procedure Sleep(DataLock: THandle; Timeout: DWORD = INFINITE); overload; virtual;
-    procedure Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE); overload; virtual;
+    Function Sleep(DataLock: THandle; Timeout: DWORD = INFINITE): TWSOWaitResult; overload; virtual;
+    Function Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE): TWSOWaitResult; overload; virtual;
     procedure Wake; virtual;
     procedure WakeAll; virtual;
   {
@@ -752,8 +752,8 @@ type
     Second overload allows for event, mutex and semaphore object to be used
     as data synchronizer.
   }
-    procedure AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE); overload; virtual;
-    procedure AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE); overload; virtual;
+    procedure AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE; AcceptAbandonedDataLock: Boolean = True); overload; virtual;
+    procedure AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; AcceptAbandonedDataLock: Boolean = True); overload; virtual;
     // events
     property OnPredicateCheckCallback: TWSOPredicateCheckCallback read fOnPredicateCheckCallback write fOnPredicateCheckCallback;
     property OnPredicateCheckEvent: TWSOPredicateCheckEvent read fOnPredicateCheckEvent write fOnPredicateCheckEvent;
@@ -792,10 +792,10 @@ type
     class Function GetLockType: TWSOLockType; override;
     class Function GetNameSuffix: String; override;
   public
-    procedure Lock; virtual;
+    Function Lock: TWSOWaitResult; virtual;
     procedure Unlock; virtual;
-    procedure Sleep(Timeout: DWORD = INFINITE); overload; virtual;
-    procedure AutoCycle(Timeout: DWORD = INFINITE); overload; virtual;
+    Function Sleep(Timeout: DWORD = INFINITE): TWSOWaitResult; overload; virtual;
+    procedure AutoCycle(Timeout: DWORD = INFINITE; AcceptAbandonedDataLock: Boolean = True); overload; virtual;
   end;
 
 {===============================================================================
@@ -3097,7 +3097,7 @@ end;
     TConditionVariable - public methods
 -------------------------------------------------------------------------------}
 
-procedure TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE);
+Function TConditionVariable.Sleep(DataLock: THandle; Timeout: DWORD = INFINITE): TWSOWaitResult;
 var
   StartTime:        TWSOTimestamp;
   TimeoutRemaining: DWORD;
@@ -3160,9 +3160,8 @@ repeat
 until ExitWait;
 // lock the DataLock synchronizer
 case WaitForSingleObject(DataLock,INFINITE) of
-  WAIT_OBJECT_0:;
-  WAIT_ABANDONED:
-    raise EWSOWaitError.Create('TConditionVariable.Sleep: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
+  WAIT_OBJECT_0:  Result := wrSignaled;
+  WAIT_ABANDONED: Result := wrAbandoned;
   WAIT_FAILED:
     raise EWSOWaitError.CreateFmt('TConditionVariable.Sleep: Failed to lock data synchronizer (%d).',[GetLastError]);
 else
@@ -3172,10 +3171,10 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-procedure TConditionVariable.Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE);
+Function TConditionVariable.Sleep(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE): TWSOWaitResult;
 begin
 If DataLock.GetLockType in [ltEvent,ltMutex,ltSemaphore] then
-  Sleep(DataLock.Handle,Timeout)
+  Result := Sleep(DataLock.Handle,Timeout)
 else
   raise EWSOInvalidObject.CreateFmt('TConditionVariable.Sleep: Unsupported data synchronizer type (%s),',[DataLock.ClassName]);
 end;
@@ -3238,19 +3237,26 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariable.AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE);
+procedure TConditionVariable.AutoCycle(DataLock: THandle; Timeout: DWORD = INFINITE; AcceptAbandonedDataLock: Boolean = True);
 var
   WakeOptions:  TWSOWakeOptions;
+  WaitResult:   DWORD;
 begin
 If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
   begin
     // lock synchronizer
-    case WaitForSingleObject(DataLock,INFINITE) of
-      WAIT_OBJECT_0:
+    WaitResult := WaitForSingleObject(DataLock,INFINITE);
+    case WaitResult of
+      WAIT_OBJECT_0,
+      WAIT_ABANDONED:
         begin
+          If (WaitResult = WAIT_ABANDONED) and not AcceptAbandonedDataLock then
+            raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data lock was abandoned before auto-cycle.');
           // test predicate and wait condition
           while not DoOnPredicateCheck do
-            Sleep(DataLock,Timeout);
+            If Sleep(DataLock,Timeout) = wrAbandoned then
+              If not AcceptAbandonedDataLock then
+                raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data lock was abandoned during predicate check.');
           // access protected data
           WakeOptions := DoOnDataAccess;
           // wake waiters before unlock
@@ -3263,8 +3269,6 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
           If not(woWakeBeforeUnlock in WakeOptions) then
             SelectWake(WakeOptions);
         end;
-      WAIT_ABANDONED:
-        raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
       WAIT_FAILED:
         raise EWSOWaitError.CreateFmt('TConditionVariable.AutoCycle: Failed to lock data synchronizer (%d).',[GetLastError]);
     else
@@ -3275,7 +3279,7 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-procedure TConditionVariable.AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE);
+procedure TConditionVariable.AutoCycle(DataLock: TSimpleWinSyncObject; Timeout: DWORD = INFINITE; AcceptAbandonedDataLock: Boolean = True);
 var
   WaitResult:   TWSOWaitResult;
   WakeOptions:  TWSOWakeOptions;
@@ -3288,11 +3292,16 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
         // lock synchronizer
         WaitResult := DataLock.WaitFor(INFINITE,ErrorCode,False);
         case WaitResult of
-          wrSignaled:
+          wrSignaled,
+          wrAbandoned:
             begin
+              If (WaitResult = wrAbandoned) and not AcceptAbandonedDataLock then
+                raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data lock was abandoned before auto-cycle.');
               // test predicate and wait condition
               while not DoOnPredicateCheck do
-                Sleep(DataLock,Timeout);
+                If Sleep(DataLock,Timeout) = wrAbandoned then
+                  If not AcceptAbandonedDataLock then
+                    raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data lock was abandoned during predicate check.');
               // access protected data
               WakeOptions := DoOnDataAccess;
               // wake waiters before unlock
@@ -3308,8 +3317,6 @@ If Assigned(fOnPredicateCheckEvent) or Assigned(fOnPredicateCheckCallback) then
               If not(woWakeBeforeUnlock in WakeOptions) then
                 SelectWake(WakeOptions);
             end;
-          wrAbandoned:
-            raise EWSOWaitError.Create('TConditionVariable.AutoCycle: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
           wrError:
             raise EWSOWaitError.CreateFmt('TConditionVariable.AutoCycle: Failed to lock data synchronizer (%d).',[ErrorCode]);
         else
@@ -3390,12 +3397,11 @@ end;
     TConditionVariableEx - public methods
 -------------------------------------------------------------------------------}
 
-procedure TConditionVariableEx.Lock;
+Function TConditionVariableEx.Lock: TWSOWaitResult;
 begin
 case WaitForSingleObject(fDataLock,INFINITE) of
-  WAIT_OBJECT_0:;
-  WAIT_ABANDONED:
-    raise EWSOWaitError.Create('TConditionVariableEx.Lock: Data synchronizer (mutex) owner died, protected data can be inconsistent.');
+  WAIT_OBJECT_0:  Result := wrSignaled;
+  WAIT_ABANDONED: Result := wrAbandoned;
   WAIT_FAILED:
     raise EWSOWaitError.CreateFmt('TConditionVariableEx.Lock: Failed to lock data synchronizer (%d).',[GetLastError]);
 else
@@ -3413,16 +3419,16 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariableEx.Sleep(Timeout: DWORD = INFINITE);
+Function TConditionVariableEx.Sleep(Timeout: DWORD = INFINITE): TWSOWaitResult;
 begin
-Sleep(fDataLock,Timeout);
+Result := Sleep(fDataLock,Timeout);
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TConditionVariableEx.AutoCycle(Timeout: DWORD = INFINITE);
+procedure TConditionVariableEx.AutoCycle(Timeout: DWORD = INFINITE; AcceptAbandonedDataLock: Boolean = True);
 begin
-AutoCycle(fDataLock,Timeout);
+AutoCycle(fDataLock,Timeout,AcceptAbandonedDataLock);
 end;
 
 
